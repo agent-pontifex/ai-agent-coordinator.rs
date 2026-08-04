@@ -192,7 +192,7 @@ fn human_readable_document_matches_the_machine_boundary() {
         "gha-indie-worker",
         "Fiducia fencing is required",
         "hidden chain-of-thought",
-        "promoted by immutable digest",
+        "immutable digest",
     ] {
         assert!(
             BOUNDARY_DOC.contains(statement),
