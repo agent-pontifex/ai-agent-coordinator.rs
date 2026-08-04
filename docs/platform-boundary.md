@@ -2,20 +2,25 @@
 
 This document explains the machine-readable contract in
 [`platform-boundary.json`](platform-boundary.json). It is tracked by Linear issue
-`DEN-1873` and starts as `proposed-defaults` so the bridge, coordinator, Fiducia,
+`DEN-1873` and starts as `proposed-defaults` so the SDK, bridge, coordinator, Fiducia,
 CI-continuity, and cluster owners can review it without silently changing a runtime API.
 
 ## Role
 
 `ai-agent-coordinator` is the **agent-orchestration control plane**. It accepts coding-agent
 work, applies organization and repository policy, selects an allowed model route, maintains
-job history and worker claims, and records approvals and evidence.
+job history and worker claims, validates and persists task/evidence envelopes, and records
+approvals and evidence.
 
-It is not a GitHub Actions implementation, a general shell executor, a Kubernetes control
-plane, a human identity provider, a product business API, or the owner of Fiducia's Raft
-state.
+It is not the canonical public Agent Pontifex protocol authority, a GitHub Actions
+implementation, a general shell executor, a Kubernetes control plane, a human identity
+provider, a product business API, or the owner of Fiducia's Raft state.
 
 ```text
+agent-pontifex/agent-sdk.rs
+    canonical discovery + leased-job protocol
+                     |
+                     v
 GitHub / Linear / operator
            |
            v
@@ -25,6 +30,7 @@ GitHub / Linear / operator
 | policy + budgets             |
 | model routing                |
 | task history + approvals     |
+| protocol validation          |
 | worker claims + evidence     |
 +------+---------------+-------+
        |               |
@@ -38,6 +44,23 @@ GitHub / Linear / operator
        |
        +----> k8s-cluster for deployment tenancy and shared backends
 ```
+
+## Protocol boundary
+
+`agent-pontifex/agent-sdk.rs` is the canonical public protocol authority. The coordinator
+consumes that protocol from an immutable source revision or released package; it does not
+redefine public discovery, service-role, supported-version, or leased-job types locally.
+
+Discovery and protocol negotiation fail closed when the advertised service role, protocol,
+or supported major-version range is incompatible. Public leased-job fields come from the
+canonical SDK. Coordinator-only policy—such as tenant capability grants, sensitivity,
+approval, immutable target, fencing, and side-effect evidence—lives in a namespaced private
+extension around the public envelope rather than forking it.
+
+The current local compatibility module may validate a pinned SDK wire shape during migration,
+but it is not an independent protocol authority. Once the shared protocol crate is consumed
+directly, duplicate local type definitions should be removed rather than maintained as a
+second source of truth.
 
 ## GitHub boundary
 
@@ -106,6 +129,8 @@ expired, stale, or mismatched grants fail before dispatch.
 validate request and expiry
         |
 resolve actor + capability + canonical issue
+        |
+validate canonical Agent Pontifex protocol envelope
         |
 classify sensitivity and scan secrets
         |
