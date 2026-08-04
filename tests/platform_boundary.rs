@@ -219,7 +219,8 @@ fn human_readable_document_matches_the_machine_boundary() {
     for statement in [
         "agent-orchestration control plane",
         "canonical public protocol authority",
-        "namespaced private extension",
+        "namespaced private",
+        "extension around the public envelope",
         "short-lived installation tokens",
         "gha-indie-worker",
         "Fiducia fencing is required",
