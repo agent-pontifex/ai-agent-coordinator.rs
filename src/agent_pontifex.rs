@@ -1,7 +1,7 @@
 //! Contract checks for the community coordinator's Agent Pontifex job wire shape.
 //!
 //! Discovery and version negotiation live in `agent_pontifex_discovery`; this
-//! module pins the staged public protocol source and fails closed if the real
+//! module pins the canonical public protocol source and fails closed if the real
 //! coordinator `Job` serialization drifts.
 
 use crate::jobs::Job;
@@ -10,9 +10,9 @@ use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
 
-pub const PROTOCOL_SOURCE_REPOSITORY: &str = "ORESoftware/ai-agent-bridge.rs";
-pub const PROTOCOL_SOURCE_PATH: &str = "sdk/agent-pontifex-protocol/src/lib.rs";
-pub const PROTOCOL_SOURCE_REVISION: &str = "ce8e853ffd907c14aaed09afd1ac18adfe28c8de";
+pub const PROTOCOL_SOURCE_REPOSITORY: &str = "agent-pontifex/agent-sdk.rs";
+pub const PROTOCOL_SOURCE_PATH: &str = "agent-pontifex-protocol/src/lib.rs";
+pub const PROTOCOL_SOURCE_REVISION: &str = "8f6521b2be61c5cd729cffef9fdd5f46e899662b";
 
 const JOB_KEYS: &[&str] = &[
     "attempts",
@@ -35,8 +35,8 @@ const JOB_KEYS: &[&str] = &[
 ];
 
 pub fn validate_protocol_source_pin() -> Result<(), ContractError> {
-    if PROTOCOL_SOURCE_REPOSITORY != "ORESoftware/ai-agent-bridge.rs"
-        || PROTOCOL_SOURCE_PATH != "sdk/agent-pontifex-protocol/src/lib.rs"
+    if PROTOCOL_SOURCE_REPOSITORY != "agent-pontifex/agent-sdk.rs"
+        || PROTOCOL_SOURCE_PATH != "agent-pontifex-protocol/src/lib.rs"
         || PROTOCOL_SOURCE_REVISION.len() != 40
         || !PROTOCOL_SOURCE_REVISION
             .bytes()
