@@ -12,7 +12,7 @@ use std::fmt;
 
 pub const PROTOCOL_SOURCE_REPOSITORY: &str = "agent-pontifex/agent-sdk.rs";
 pub const PROTOCOL_SOURCE_PATH: &str = "agent-pontifex-protocol/src/lib.rs";
-pub const PROTOCOL_SOURCE_REVISION: &str = "8f6521b2be61c5cd729cffef9fdd5f46e899662b";
+pub const PROTOCOL_SOURCE_REVISION: &str = "6a97c7d9e1cc83ca4976bcf45e63deac6bd32a61";
 
 const JOB_KEYS: &[&str] = &[
     "attempts",
