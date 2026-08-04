@@ -8,11 +8,12 @@
     "coding-agent job intake and durable history",
     "organization and repository policy",
     "model routing and budget enforcement",
-    "provider-neutral task and evidence envelopes",
+    "validation and persistence of provider-neutral task and evidence envelopes",
     "agent worker claims, heartbeats, retries, and cancellation",
     "approval and side-effect receipts"
   ],
   "does_not_own": [
+    "canonical public Agent Pontifex protocol schema",
     "GitHub Actions workflow semantics",
     "arbitrary shell execution",
     "Kubernetes cluster registration or GitOps tenancy",
@@ -21,6 +22,16 @@
     "Fiducia Raft coordination state"
   ],
   "integrations": {
+    "agent-sdk": {
+      "purpose": "canonical public Agent Pontifex discovery and leased-job protocol",
+      "authority": "agent-pontifex/agent-sdk.rs",
+      "source_policy": "consume an immutable source revision or released package",
+      "required_behavior": [
+        "fail closed on an incompatible service role, protocol, or supported version range",
+        "consume canonical protocol types rather than redefining them",
+        "keep coordinator-only policy in a namespaced private extension"
+      ]
+    },
     "github": {
       "purpose": "repository metadata, webhook intake, branches, commits, pull requests, and checks",
       "authentication": "short-lived installation-scoped GitHub App token",
@@ -88,6 +99,8 @@
     }
   },
   "task_envelope": {
+    "scope": "private coordinator request and side-effect context layered around canonical public Agent Pontifex job fields",
+    "public_protocol_authority": "agent-pontifex/agent-sdk.rs",
     "required_fields": [
       "request_id",
       "idempotency_key",
