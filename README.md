@@ -41,6 +41,7 @@ The server does **not** store a broad GitHub personal access token. Workers shou
 
 ## Features
 
+- Credential-free Agent Pontifex discovery at `GET /.well-known/agent-pontifex`
 - OpenAI-compatible `POST /v1/chat/completions`
 - Logical models: `auto`, `local`, `cheap`, `balanced`, `frontier`, or a configured model ID
 - Task-specific model orders and explicit fallback chains
@@ -96,7 +97,26 @@ docker compose up --build
 ```bash
 curl http://localhost:8080/healthz
 curl http://localhost:8080/readyz
+curl http://localhost:8080/.well-known/agent-pontifex
 ```
+
+## Agent Pontifex compatibility
+
+The well-known endpoint advertises only the vendor-neutral leased-job contract:
+create, claim, heartbeat, complete, cancel, retry, idempotency, and bounded leases.
+It is intentionally public-safe and contains no credentials, tenant identifiers,
+provider routes, budgets, GitHub administration, Linear delivery, Slack payloads,
+or deployment topology.
+
+The descriptor binds the canonical `coordinator` service to the
+`agent-pontifex.coordinator` protocol and an explicit supported major-version
+range. Agent Pontifex SDK clients fail closed when the service role, protocol, or
+version range is incompatible. Product-specific behavior must remain in a
+namespaced extension; this community descriptor currently advertises none.
+
+After the shared protocol crate moves to `agent-pontifex/agent-sdk.rs`, this local
+compatibility module should consume that crate rather than becoming an
+independent protocol authority.
 
 ## Model gateway
 

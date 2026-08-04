@@ -1,3 +1,5 @@
+pub mod agent_pontifex;
+pub mod agent_pontifex_discovery;
 pub mod app;
 pub mod config;
 pub mod db;

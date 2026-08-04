@@ -101,6 +101,10 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(health))
         .route("/readyz", get(ready))
+        .route(
+            crate::agent_pontifex_discovery::DISCOVERY_PATH,
+            get(agent_pontifex_descriptor),
+        )
         .route("/v1/models", get(list_models))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/jobs", post(create_job))
@@ -144,6 +148,10 @@ async fn add_no_store(
         .headers_mut()
         .insert("cache-control", HeaderValue::from_static("no-store"));
     response
+}
+
+async fn agent_pontifex_descriptor() -> Json<crate::agent_pontifex_discovery::ServiceDescriptor> {
+    Json(crate::agent_pontifex_discovery::coordinator_descriptor())
 }
 
 async fn health() -> Json<Value> {
