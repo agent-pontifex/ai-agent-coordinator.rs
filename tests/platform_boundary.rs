@@ -35,13 +35,18 @@ fn identifies_the_canonical_issue_and_control_plane_role() {
 }
 
 #[test]
-fn separates_agent_policy_from_ci_cluster_identity_and_raft_authority() {
+fn separates_agent_policy_from_protocol_ci_cluster_identity_and_raft_authority() {
     let document = boundary();
 
     assert!(array_contains(
         &document,
         "/owns",
         "model routing and budget enforcement"
+    ));
+    assert!(array_contains(
+        &document,
+        "/does_not_own",
+        "canonical public Agent Pontifex protocol schema"
     ));
     assert!(array_contains(
         &document,
@@ -63,6 +68,31 @@ fn separates_agent_policy_from_ci_cluster_identity_and_raft_authority() {
         "/does_not_own",
         "Fiducia Raft coordination state"
     ));
+}
+
+#[test]
+fn consumes_the_canonical_agent_sdk_protocol_without_redefining_it() {
+    let document = boundary();
+
+    assert_eq!(
+        string_at(&document, "/integrations/agent-sdk/authority"),
+        "agent-pontifex/agent-sdk.rs"
+    );
+    assert!(array_contains(
+        &document,
+        "/integrations/agent-sdk/required_behavior",
+        "consume canonical protocol types rather than redefining them"
+    ));
+    assert!(array_contains(
+        &document,
+        "/integrations/agent-sdk/required_behavior",
+        "fail closed on an incompatible service role, protocol, or supported version range"
+    ));
+    assert_eq!(
+        string_at(&document, "/task_envelope/public_protocol_authority"),
+        "agent-pontifex/agent-sdk.rs"
+    );
+    assert!(string_at(&document, "/task_envelope/scope").contains("private coordinator"));
 }
 
 #[test]
@@ -188,6 +218,8 @@ fn keeps_credentials_secret_payloads_and_high_cardinality_ids_out_of_telemetry()
 fn human_readable_document_matches_the_machine_boundary() {
     for statement in [
         "agent-orchestration control plane",
+        "canonical public protocol authority",
+        "namespaced private extension",
         "short-lived installation tokens",
         "gha-indie-worker",
         "Fiducia fencing is required",
