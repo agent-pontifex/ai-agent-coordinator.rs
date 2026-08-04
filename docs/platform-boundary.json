@@ -1,0 +1,191 @@
+{
+  "contract_version": 1,
+  "status": "proposed-defaults",
+  "linear_issue": "DEN-1873",
+  "service": "ai-agent-coordinator",
+  "role": "agent-orchestration-control-plane",
+  "owns": [
+    "coding-agent job intake and durable history",
+    "organization and repository policy",
+    "model routing and budget enforcement",
+    "provider-neutral task and evidence envelopes",
+    "agent worker claims, heartbeats, retries, and cancellation",
+    "approval and side-effect receipts"
+  ],
+  "does_not_own": [
+    "GitHub Actions workflow semantics",
+    "arbitrary shell execution",
+    "Kubernetes cluster registration or GitOps tenancy",
+    "portfolio-wide human identity",
+    "product domain APIs",
+    "Fiducia Raft coordination state"
+  ],
+  "integrations": {
+    "github": {
+      "purpose": "repository metadata, webhook intake, branches, commits, pull requests, and checks",
+      "authentication": "short-lived installation-scoped GitHub App token",
+      "required_scope": "one assigned organization and the minimum assigned repositories",
+      "forbidden": [
+        "broad personal access token",
+        "ambient host credential",
+        "credential in a task payload or model prompt"
+      ]
+    },
+    "linear": {
+      "purpose": "canonical issue context and status evidence",
+      "authentication": "server-owned scoped credential",
+      "required_behavior": [
+        "resolve the canonical issue before creating duplicates",
+        "record issue identifier in branch, commit, and pull request",
+        "never place the credential in a worker payload"
+      ]
+    },
+    "gha-indie-worker": {
+      "purpose": "GitHub Actions-compatible workflow execution",
+      "request_fields": [
+        "repository",
+        "immutable_commit_sha",
+        "reviewed_workflow_path_or_profile",
+        "idempotency_key",
+        "traceparent"
+      ],
+      "forbidden": [
+        "caller-selected shell",
+        "mutable branch or tag as execution authority",
+        "unreviewed marketplace action execution in the independent lane",
+        "caller-selected Kubernetes manifest or runner image"
+      ]
+    },
+    "fiducia": {
+      "purpose": "cross-process fencing for irreversible side effects and horizontally scaled claims",
+      "required_for": [
+        "multiple coordinator replicas performing the same external mutation",
+        "webhook delivery claims shared across replicas",
+        "lease-protected merge, deploy, release, or credential rotation"
+      ],
+      "not_required_for": [
+        "single-transaction PostgreSQL queue claims with no external side effect",
+        "read-only planning",
+        "dry-run validation"
+      ]
+    },
+    "k8s-cluster": {
+      "purpose": "deployment registration, namespace tenancy, secrets delivery, shared NATS, and observability backends",
+      "forbidden": [
+        "coordinator-created cluster-scoped resources",
+        "credentials embedded in Argo parameters",
+        "deployment from a mutable source reference"
+      ]
+    },
+    "model_providers": {
+      "purpose": "provider-neutral inference after local policy and secret scanning",
+      "required_behavior": [
+        "classify sensitivity before provider selection",
+        "redact secrets before remote inference",
+        "enforce organization, repository, and request budgets",
+        "record route and cost evidence without hidden chain-of-thought"
+      ]
+    }
+  },
+  "task_envelope": {
+    "required_fields": [
+      "request_id",
+      "idempotency_key",
+      "tenant",
+      "repository",
+      "actor",
+      "task_type",
+      "sensitivity",
+      "capability_grant_id",
+      "created_at",
+      "expires_at",
+      "traceparent"
+    ],
+    "side_effect_fields": [
+      "immutable_commit_sha",
+      "approval_id",
+      "fencing_token",
+      "causation_id"
+    ],
+    "must_not_include": [
+      "provider credential",
+      "GitHub App private key",
+      "personal access token",
+      "unbounded repository archive",
+      "hidden chain-of-thought"
+    ]
+  },
+  "side_effect_gates": [
+    "the actor and tenant match the capability grant",
+    "the repository and operation are allowlisted",
+    "the capability and approval have not expired",
+    "the target revision is immutable",
+    "the idempotency key has not already produced a terminal receipt",
+    "a current fencing token is present when horizontal execution can race",
+    "the exact side effect is recorded with evidence after completion"
+  ],
+  "failure_semantics": {
+    "unsupported_operation": "reject before dispatch",
+    "invalid_or_expired_capability": "reject before side effects",
+    "provider_unavailable": "use an allowed fallback or return a retryable terminal outcome",
+    "worker_lease_expired": "requeue only after the prior worker can no longer authorize a side effect",
+    "ambiguous_external_result": "do not retry blindly; reconcile provider or GitHub state first",
+    "cancellation": "stop new dispatch, revoke pending approvals, and reconcile in-flight work"
+  },
+  "observability": {
+    "required_resource_attributes": [
+      "service.name",
+      "service.version",
+      "deployment.environment",
+      "product.name",
+      "component.role",
+      "git.commit.sha"
+    ],
+    "required_context": [
+      "request_id",
+      "trace_id",
+      "correlation_id",
+      "causation_id",
+      "task_type",
+      "provider_type",
+      "outcome"
+    ],
+    "forbidden_fields": [
+      "access_token",
+      "refresh_token",
+      "authorization_header",
+      "GitHub App private key",
+      "personal access token",
+      "raw model prompt containing repository secrets",
+      "raw model output containing repository secrets",
+      "hidden chain-of-thought"
+    ],
+    "high_cardinality_metric_labels_forbidden": [
+      "actor_id",
+      "tenant_id",
+      "repository",
+      "request_id",
+      "job_id",
+      "commit_sha"
+    ],
+    "audit_receipt_required_for": [
+      "branch creation",
+      "commit push",
+      "pull request creation or merge",
+      "deployment",
+      "release publication",
+      "credential or policy change"
+    ]
+  },
+  "deployment": {
+    "artifact_policy": "build once, test and sign the exact image, deploy by immutable digest",
+    "minimum_isolation": [
+      "dedicated service account",
+      "namespace-scoped RBAC",
+      "network egress policy",
+      "ExternalSecret-managed credentials",
+      "separate worker identity from coordinator identity"
+    ],
+    "horizontal_scaling_gate": "shared durable delivery claims or Fiducia-fenced claims must replace in-memory deduplication before multiple replicas perform external mutations"
+  }
+}
