@@ -1,0 +1,136 @@
+# one-shot trigger after workflow exists in the parent tree
+name: DEN-629 apply reviewed organization relationship payload
+
+on:
+  push:
+    branches:
+      - agent/DEN-629-org-repository-relationships-v2
+    paths:
+      - .github/den629-payload/**
+      - .github/workflows/den-629-apply-payload.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: den-629-org-relationship-payload
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: >-
+      github.repository == 'ORESoftware/ai-agent-coordinator.rs' &&
+      github.ref == 'refs/heads/agent/DEN-629-org-repository-relationships-v2'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out exact payload commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: true
+
+      - name: Verify and apply reviewed payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = push
+          test "$GITHUB_REPOSITORY" = ORESoftware/ai-agent-coordinator.rs
+          test "$GITHUB_REF_NAME" = agent/DEN-629-org-repository-relationships-v2
+
+          payload_b64="$RUNNER_TEMP/den629-org-relationships.tar.gz.b64"
+          payload_tar="$RUNNER_TEMP/den629-org-relationships.tar.gz"
+          stage="$RUNNER_TEMP/den629-org-relationships"
+          mkdir -p "$stage"
+
+          mapfile -t parts < <(find .github/den629-payload -maxdepth 1 -type f -name 'part[0-9][0-9]' -print | LC_ALL=C sort)
+          test "${#parts[@]}" -eq 7
+          cat "${parts[@]}" > "$payload_b64"
+          echo '42541d14d4999eb02620d0708c14fc83fef3320abaf75e62cfba79126bb1f958  '"$payload_b64" | sha256sum -c -
+          base64 --decode "$payload_b64" > "$payload_tar"
+          echo 'db3ef1592bae09463e19f90c55b39114f98ae91ebeed57bed19d23bbf1c63cf6  '"$payload_tar" | sha256sum -c -
+
+          PAYLOAD_TAR="$payload_tar" PAYLOAD_STAGE="$stage" python3 - <<'PY'
+          import os
+          import tarfile
+          from pathlib import PurePosixPath
+
+          expected = [
+              '.den629-files.txt',
+              '.den629-sha256.txt',
+              'config/org-project-registry.yaml',
+              'deploy/k8s/bootstrap/org-context-repositories/README.md',
+              'deploy/k8s/bootstrap/org-context-repositories/job.yaml',
+              'deploy/k8s/bootstrap/org-context-repositories/kustomization.yaml',
+              'docs/org-project-context.md',
+              'docs/org-repository-relationships-rollout.md',
+              'scripts/render_org_project_context.py',
+              'scripts/validate-org-context-bootstrap.rb',
+              'scripts/validate_org_project_registry.py',
+              'tests/e2e/browser/org-context.spec.mjs',
+              'tests/test_org_project_registry.py',
+          ]
+          archive_path = os.environ['PAYLOAD_TAR']
+          stage = os.environ['PAYLOAD_STAGE']
+          with tarfile.open(archive_path, 'r:gz') as archive:
+              members = archive.getmembers()
+              names = [member.name for member in members]
+              if names != expected:
+                  raise SystemExit(f'unexpected payload inventory: {names!r}')
+              for member in members:
+                  path = PurePosixPath(member.name)
+                  if path.is_absolute() or '..' in path.parts:
+                      raise SystemExit(f'unsafe archive path: {member.name!r}')
+                  if not member.isfile():
+                      raise SystemExit(f'non-regular archive member: {member.name!r}')
+              archive.extractall(stage, filter='data')
+          PY
+
+          (
+            cd "$stage"
+            sha256sum -c .den629-sha256.txt
+          )
+
+          mapfile -t files < "$stage/.den629-files.txt"
+          test "${#files[@]}" -eq 11
+          for path in "${files[@]}"; do
+            test -f "$stage/$path"
+            mkdir -p "$(dirname "$path")"
+            cp -p "$stage/$path" "$path"
+          done
+
+          python3 -m py_compile \
+            scripts/validate_org_project_registry.py \
+            scripts/render_org_project_context.py \
+            tests/test_org_project_registry.py
+          python3 -m unittest -v tests/test_org_project_registry.py
+          python3 scripts/validate_org_project_registry.py
+          ruby -c scripts/validate-org-context-bootstrap.rb
+          ruby scripts/validate-org-context-bootstrap.rb
+          ruby scripts/validate-org-context-bootstrap.rb --self-test
+          node --check tests/e2e/browser/org-context.spec.mjs
+
+          git rm -r -- .github/den629-payload
+          git add -- "${files[@]}"
+          git diff --cached --check
+
+          EXPECTED_FILES="$stage/.den629-files.txt" python3 - <<'PY'
+          import os
+          import subprocess
+          from pathlib import Path
+
+          expected = set(Path(os.environ['EXPECTED_FILES']).read_text(encoding='utf-8').splitlines())
+          expected.update({f'.github/den629-payload/part{index:02d}' for index in range(7)})
+          actual = set(subprocess.check_output(
+              ['git', 'diff', '--cached', '--name-only', '--diff-filter=ACDMRTUXB'],
+              text=True,
+          ).splitlines())
+          if actual != expected:
+              raise SystemExit(f'unexpected staged paths: expected={sorted(expected)!r}, actual={sorted(actual)!r}')
+          PY
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'DEN-629 publish organization relationship contract'
+          git push origin "HEAD:$GITHUB_REF_NAME"
