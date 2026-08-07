@@ -26,6 +26,7 @@ The canonical implementation combines the compatible intent instead of selecting
 The checked-in ledger therefore represents **32 deterministic independent Git histories, 888 tracked files, and 30 immutable gitlinks**. Running the reconstruction twice produces identical commit SHAs for all repositories.
 
 The superseded `deploy/k8s/bootstrap` all-at-once publisher and its bundled generator were removed during reconciliation. That job accepted a broad repository-administration credential and attempted the entire fleet in one execution, contradicting the canonical one-repository confirmation, preflight, and remote-head verification boundary. Each generated repository is sealed from its complete staged tree as a deterministic parentless commit, so preexisting source-history depth cannot silently alter the published content or identity.
+The superseded `deploy/k8s/bootstrap` all-at-once publisher and its bundled generator were removed during reconciliation. That job accepted a broad repository-administration credential and attempted the entire fleet in one execution, contradicting the canonical one-repository confirmation, preflight, and remote-head verification boundary.
 
 ## Reconstruct and validate locally
 
