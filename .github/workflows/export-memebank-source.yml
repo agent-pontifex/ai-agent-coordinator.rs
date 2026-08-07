@@ -1,0 +1,111 @@
+name: export-memebank-source
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/export-memebank-source.yml
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    if: >-
+      github.repository == 'ORESoftware/ai-agent-coordinator.rs' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.head_ref == 'agent/export-memebank-source-20260803'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out exact branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Audit and reconstruct sealed source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest=repository-fleets/memebank-source.json
+          encoded="$RUNNER_TEMP/memebank-source.b64"
+          archive="$RUNNER_TEMP/memebank-source.tar.gz"
+          : > "$encoded"
+
+          python3 - "$manifest" "$encoded" <<'PY'
+          import base64
+          import binascii
+          import hashlib
+          import json
+          from pathlib import Path
+          import sys
+
+          manifest_path = Path(sys.argv[1])
+          encoded_path = Path(sys.argv[2])
+          manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+          parts = []
+          failed = False
+          for index, record in enumerate(manifest['payload']['chunks']):
+              path = Path(record['path'])
+              raw = path.read_bytes()
+              observed = hashlib.sha256(raw).hexdigest()
+              print(
+                  f"chunk={index} bytes={len(raw)}/{record['bytes']} "
+                  f"sha256={observed}/{record['sha256']}"
+              )
+              if len(raw) != record['bytes'] or observed != record['sha256']:
+                  failed = True
+              invalid = [
+                  (offset, byte)
+                  for offset, byte in enumerate(raw)
+                  if not (
+                      65 <= byte <= 90
+                      or 97 <= byte <= 122
+                      or 48 <= byte <= 57
+                      or byte in (43, 47, 61)
+                  )
+              ]
+              if invalid:
+                  offset, byte = invalid[0]
+                  print(f"chunk={index} first_invalid_offset={offset} byte=0x{byte:02x}")
+                  failed = True
+              parts.append(raw)
+
+          encoded = b''.join(parts)
+          print(
+              f"encoded_bytes={len(encoded)}/{manifest['payload']['base64_bytes']} "
+              f"mod4={len(encoded) % 4}"
+          )
+          if len(encoded) != manifest['payload']['base64_bytes']:
+              failed = True
+          try:
+              decoded = base64.b64decode(encoded, validate=True)
+          except (ValueError, binascii.Error) as exc:
+              print(f"strict_base64_error={exc}")
+              failed = True
+              decoded = b''
+          encoded_path.write_bytes(encoded)
+          if failed:
+              raise SystemExit(1)
+          Path(str(encoded_path) + '.decoded').write_bytes(decoded)
+          PY
+
+          mv "$encoded.decoded" "$archive"
+          test "$(stat -c %s "$archive")" = "$(jq -r '.archive.bytes' "$manifest")"
+          observed="$(sha256sum "$archive" | awk '{print $1}')"
+          test "$observed" = "$(jq -r '.archive.sha256' "$manifest")"
+          tar -tzf "$archive" > "$RUNNER_TEMP/memebank-source.members.txt"
+          printf '%s  %s\n' "$observed" memebank-source.tar.gz > "$RUNNER_TEMP/memebank-source.sha256"
+
+      - name: Upload exact sealed source evidence
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: memebank-source-exact
+          path: |
+            ${{ runner.temp }}/memebank-source.tar.gz
+            ${{ runner.temp }}/memebank-source.members.txt
+            ${{ runner.temp }}/memebank-source.sha256
+          if-no-files-found: error
+          retention-days: 1
