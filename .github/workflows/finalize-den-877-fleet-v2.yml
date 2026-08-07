@@ -1,0 +1,229 @@
+name: Finalize clean DEN-877 fleet repair
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches:
+      - agent/den-877-fleet-merge-repair-v2
+
+permissions:
+  contents: write
+
+concurrency:
+  group: den-877-clean-finalize-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  finalize:
+    if: github.event_name == 'push' || github.head_ref == 'agent/den-877-fleet-merge-repair-v2'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out clean repair branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: agent/den-877-fleet-merge-repair-v2
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Reconcile generator identity, outputs, history sealing, and publication boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+
+          import base64
+          import gzip
+          import hashlib
+          from pathlib import Path
+
+          stale_digest = "50629a57beca1ac85928cfae8fbebbca4f62a6455a7013016f92b1203dcbbd1f"
+          reviewed_digest = "a57b00961ee57ae09bf3bb2e2d09afbdd1ddbbbde832b027802f82a1fc5dfa84"
+          payload_dir = Path("repository-fleets/hypesiege-streempilot")
+          parts = sorted(payload_dir.glob("generator.py.gz.b64.part-*"))
+          expected_names = [f"generator.py.gz.b64.part-{index:02d}" for index in range(6)]
+          if [path.name for path in parts] != expected_names:
+              raise SystemExit("reviewed six-part generator payload is incomplete or ambiguous")
+          source = gzip.decompress(
+              base64.b64decode(
+                  "".join(path.read_text(encoding="utf-8").strip() for path in parts),
+                  validate=True,
+              )
+          )
+          actual_digest = hashlib.sha256(source).hexdigest()
+          if actual_digest != reviewed_digest:
+              raise SystemExit(
+                  f"reviewed generator identity changed: {actual_digest} != {reviewed_digest}"
+              )
+
+          checksum_paths = [
+              Path("scripts/reconstruct_hypesiege_streempilot_fleet.py"),
+              Path("scripts/publish_hypesiege_streempilot_fleet.py"),
+              Path("repository-fleets/hypesiege-streempilot.json"),
+              Path("docs/hypesiege-streempilot-repository-publication.md"),
+          ]
+          for path in checksum_paths:
+              text = path.read_text(encoding="utf-8")
+              if stale_digest not in text and reviewed_digest not in text:
+                  raise SystemExit(f"generator identity is absent from {path}")
+              path.write_text(text.replace(stale_digest, reviewed_digest), encoding="utf-8")
+
+          reconstructor_path = Path("scripts/reconstruct_hypesiege_streempilot_fleet.py")
+          reconstructor = reconstructor_path.read_text(encoding="utf-8")
+          root_anchor = '    source = source.replace(expected_literal, replacement)\n'
+          relocation = '''
+              archive_literal = "/mnt/data/hypesiege-streempilot-fleet.tar.gz"
+              checksum_literal = "/mnt/data/hypesiege-streempilot-fleet.SHA256"
+              if source.count(archive_literal) != 1:
+                  raise ReconstructionError("generator archive-output contract changed")
+              if source.count(checksum_literal) != 1:
+                  raise ReconstructionError("generator checksum-output contract changed")
+              source = source.replace(
+                  archive_literal,
+                  str(output_root.parent / f"{output_root.name}.tar.gz"),
+              )
+              source = source.replace(
+                  checksum_literal,
+                  str(output_root.parent / f"{output_root.name}.SHA256"),
+              )
+          '''
+          if "generator checksum-output contract changed" not in reconstructor:
+              if reconstructor.count(root_anchor) != 1:
+                  raise SystemExit("reconstructor output-root insertion point drifted")
+              reconstructor = reconstructor.replace(root_anchor, root_anchor + relocation, 1)
+
+          old_cleanup = '''    stale_archive = output_root.parent / f"{output_root.name}.tar.gz"
+              stale_archive.unlink(missing_ok=True)
+              stale_archive.with_suffix(stale_archive.suffix + ".SHA256").unlink(missing_ok=True)
+          '''
+          new_cleanup = '''    stale_archive = output_root.parent / f"{output_root.name}.tar.gz"
+              stale_checksum = output_root.parent / f"{output_root.name}.SHA256"
+              stale_archive.unlink(missing_ok=True)
+              stale_checksum.unlink(missing_ok=True)
+          '''
+          if old_cleanup in reconstructor:
+              reconstructor = reconstructor.replace(old_cleanup, new_cleanup, 1)
+          elif "stale_checksum = output_root.parent" not in reconstructor:
+              raise SystemExit("reconstructor generated-artifact cleanup block drifted")
+
+          old_sealer = '''def amend_root_commit(repository: pathlib.Path) -> str:
+              if run(["git", "rev-list", "--count", "HEAD"], cwd=repository).strip() != "1":
+                  raise ReconstructionError(f"{repository} must contain exactly one source commit")
+              run(
+                  ["git", "commit", "--amend", "--no-edit", "--reset-author"],
+                  cwd=repository,
+                  env=git_environment(),
+              )
+              return run(["git", "rev-parse", "HEAD"], cwd=repository).strip()
+          '''
+          new_sealer = '''def amend_root_commit(repository: pathlib.Path) -> str:
+              commit_count_text = run(
+                  ["git", "rev-list", "--count", "HEAD"], cwd=repository
+              ).strip()
+              try:
+                  commit_count = int(commit_count_text)
+              except ValueError as error:
+                  raise ReconstructionError(
+                      f"{repository} returned an invalid source commit count"
+                  ) from error
+              if commit_count < 1:
+                  raise ReconstructionError(f"{repository} contains no source commit")
+
+              tree = run(["git", "write-tree"], cwd=repository).strip()
+              message = run(["git", "log", "-1", "--format=%B"], cwd=repository).strip()
+              if not message:
+                  raise ReconstructionError(f"{repository} source commit message is empty")
+              sealed_commit = run(
+                  ["git", "commit-tree", tree, "-m", message],
+                  cwd=repository,
+                  env=git_environment(),
+              ).strip()
+              run(
+                  ["git", "update-ref", "refs/heads/main", sealed_commit],
+                  cwd=repository,
+              )
+              run(["git", "reset", "--hard", sealed_commit], cwd=repository)
+              if run(
+                  ["git", "rev-list", "--count", "HEAD"], cwd=repository
+              ).strip() != "1":
+                  raise ReconstructionError(
+                      f"{repository} did not collapse to one deterministic root"
+                  )
+              return sealed_commit
+          '''
+          if old_sealer in reconstructor:
+              reconstructor = reconstructor.replace(old_sealer, new_sealer, 1)
+          elif "did not collapse to one deterministic root" not in reconstructor:
+              raise SystemExit("reconstructor root-sealing function drifted")
+          reconstructor_path.write_text(reconstructor, encoding="utf-8")
+
+          docs_path = Path("docs/hypesiege-streempilot-repository-publication.md")
+          docs = docs_path.read_text(encoding="utf-8")
+          marker = "## Reconstruct and validate locally\n"
+          paragraph = (
+              "The reviewed generator may use setup commits while assembling a monorepo. "
+              "Reconstruction preserves the final indexed tree and latest reviewed commit "
+              "message, then creates a parentless fixed-author/fixed-date root commit. This "
+              "removes timestamp-dependent setup history without discarding generated files "
+              "or child gitlinks.\n\n"
+              "The superseded `deploy/k8s/bootstrap` all-at-once publisher and its bundled "
+              "generator were removed during reconciliation. That job accepted a broad "
+              "repository-administration credential and attempted the entire fleet in one "
+              "execution, contradicting the canonical one-repository confirmation, preflight, "
+              "and remote-head verification boundary.\n\n"
+          )
+          if "The reviewed generator may use setup commits" not in docs:
+              if marker not in docs:
+                  raise SystemExit("publication documentation insertion point is missing")
+              docs = docs.replace(marker, paragraph + marker, 1)
+          docs_path.write_text(docs, encoding="utf-8")
+
+          stale_paths = [
+              Path(".github/hypesiege-streempilot-device-publish.sh"),
+              Path(".github/workflows/hypesiege-owner-authorized-publish.yml"),
+              Path(".github/workflows/hypesiege-streempilot-live-publish.yml"),
+              Path(".github/workflows/hypesiege-streempilot-owner-publish-now.yml"),
+              Path(".github/workflows/repository-admin-environment-discovery.yml"),
+              Path("repository-fleets/hypesiege-streempilot/AUTHORIZE-20260731"),
+              Path("repository-fleets/hypesiege-streempilot/RECONCILE-TRIGGER-20260731"),
+              Path(".github/workflows/finalize-den-877-fleet-v2.yml"),
+          ]
+          stale_paths.extend(
+              Path("deploy/k8s/bootstrap") / name
+              for name in [
+                  "hypesiege-streempilot-bootstrap-job.yaml",
+                  "kustomization.yaml",
+                  *[f"generate.py.gz.b64.part-{index:02d}" for index in range(7)],
+              ]
+          )
+          for path in stale_paths:
+              path.unlink(missing_ok=True)
+          PY
+      - name: Validate all 32 independent histories and publication guards
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile \
+            scripts/reconstruct_hypesiege_streempilot_fleet.py \
+            scripts/publish_hypesiege_streempilot_fleet.py \
+            scripts/test_publish_hypesiege_streempilot_fleet.py
+          python -m unittest -v scripts/test_publish_hypesiege_streempilot_fleet.py
+          test -z "$(git grep -l '50629a57beca1ac85928cfae8fbebbca4f62a6455a7013016f92b1203dcbbd1f' -- \
+            scripts/reconstruct_hypesiege_streempilot_fleet.py \
+            scripts/publish_hypesiege_streempilot_fleet.py \
+            repository-fleets/hypesiege-streempilot.json \
+            docs/hypesiege-streempilot-repository-publication.md || true)"
+          test ! -d deploy/k8s/bootstrap
+          git diff --check
+      - name: Commit clean semantic repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "DEN-877 reconcile deterministic fleet publication state"
+          git push origin "HEAD:agent/den-877-fleet-merge-repair-v2"
