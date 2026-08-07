@@ -26,6 +26,7 @@ kubectl -n ai-agent-coordinator logs \
 The Job is idempotent: an existing public repository with the exact canonical full name is accepted. Unexpected API responses, identities, organization membership, visibility, or repository metadata fail closed.
 
 The Job has no retries, a five-minute active deadline, a one-day TTL, no service-account token, no host namespace access, one unprivileged container, and bounded in-memory temporary storage. It must not be placed in a continuously reconciled Argo CD Application. After direct GitHub verification, remove the optional admin Secret if no other approved operation requires it.
+The Job has `backoffLimit: 0`, a five-minute active deadline, and a one-day TTL. It must not be placed in a continuously reconciled Argo CD Application. After direct GitHub verification, remove the optional admin Secret if no other approved operation requires it.
 
 ## Verify
 
@@ -50,3 +51,4 @@ ruby scripts/validate-meta-agent-bootstrap.rb --self-test
 ```
 
 The contract rejects accidental steady-state inclusion, extra overlay resources, retries, missing deadlines or cleanup, mutable images, service-account tokens, host namespaces, extra containers, privileged containers, plaintext credentials, target drift, weak identity/membership checks, and unbounded temporary storage.
+The contract rejects accidental steady-state inclusion, extra resources, retries, mutable images, service-account tokens, privileged containers, plaintext credentials, target drift, weak identity/membership checks, and unbounded temporary storage.

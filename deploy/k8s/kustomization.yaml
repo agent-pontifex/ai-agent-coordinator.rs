@@ -10,4 +10,3 @@ resources:
   - telemetry-external-secret.yaml
   - telemetry-delivery-cronjob.yaml
   - telemetry-nightly-cronjob.yaml
-  - meta-agent-repository-bootstrap-job.yaml
