@@ -9,8 +9,12 @@ on:
       - scripts/reconstruct_hypesiege_streempilot_fleet.py
       - scripts/publish_hypesiege_streempilot_fleet.py
       - scripts/test_publish_hypesiege_streempilot_fleet.py
+      - scripts/test_hypesiege_streempilot_publisher_hardening.py
+      - scripts/render_hypesiege_streempilot_plan.py
+      - scripts/test_hypesiege_streempilot_plan_browser.py
       - docs/memebank-repository-bootstrap.md
       - docs/hypesiege-streempilot-repository-publication.md
+      - docs/hypesiege-streempilot-publisher-hardening.md
       - .github/workflows/repository-fleets.yml
   push:
     branches: [main]
@@ -21,8 +25,12 @@ on:
       - scripts/reconstruct_hypesiege_streempilot_fleet.py
       - scripts/publish_hypesiege_streempilot_fleet.py
       - scripts/test_publish_hypesiege_streempilot_fleet.py
+      - scripts/test_hypesiege_streempilot_publisher_hardening.py
+      - scripts/render_hypesiege_streempilot_plan.py
+      - scripts/test_hypesiege_streempilot_plan_browser.py
       - docs/memebank-repository-bootstrap.md
       - docs/hypesiege-streempilot-repository-publication.md
+      - docs/hypesiege-streempilot-publisher-hardening.md
       - .github/workflows/repository-fleets.yml
   workflow_dispatch:
 
@@ -82,7 +90,11 @@ jobs:
 
   hypesiege-streempilot:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+    env:
+      PYTHONHASHSEED: "0"
+      TZ: UTC
+      LC_ALL: C.UTF-8
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -90,16 +102,29 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
+      - name: Validate the fleet workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/repo:ro" \
+            --workdir /repo \
+            rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 \
+            .github/workflows/repository-fleets.yml
       - name: Compile deterministic fleet tools
         run: |
           python -m py_compile \
             scripts/reconstruct_hypesiege_streempilot_fleet.py \
             scripts/publish_hypesiege_streempilot_fleet.py \
-            scripts/test_publish_hypesiege_streempilot_fleet.py
+            scripts/test_publish_hypesiege_streempilot_fleet.py \
+            scripts/test_hypesiege_streempilot_publisher_hardening.py \
+            scripts/render_hypesiege_streempilot_plan.py \
+            scripts/test_hypesiege_streempilot_plan_browser.py
       - name: Reconstruct, compare, and preflight the sealed fleet
         run: |
           python -m unittest -v \
-            scripts/test_publish_hypesiege_streempilot_fleet.py
+            scripts/test_publish_hypesiege_streempilot_fleet.py \
+            scripts/test_hypesiege_streempilot_publisher_hardening.py
       - name: Render representative network-free plans
         shell: bash
         run: |
@@ -110,6 +135,8 @@ jobs:
           python scripts/publish_hypesiege_streempilot_fleet.py \
             --repository streempilot/streempilot-monorepo \
             > streempilot-plan.json
+          python scripts/render_hypesiege_streempilot_plan.py \
+            --output operator-plan.html
           python - <<'PY'
           import json
           from pathlib import Path
@@ -134,8 +161,13 @@ jobs:
               "files": 43,
               "gitlinks": 16,
           }
+          html = Path("operator-plan.html").read_text(encoding="utf-8")
+          assert html.count("data-repository=") == 32
+          assert "<script" not in html.casefold()
+          assert "<form" not in html.casefold()
+          assert "https://" not in html
           PY
-      - name: Reject conflict markers and live credential wiring
+      - name: Reject conflict markers, live credential wiring, and mutable actions
         shell: bash
         run: |
           set -euo pipefail
@@ -143,7 +175,10 @@ jobs:
             repository-fleets/hypesiege-streempilot* \
             scripts/reconstruct_hypesiege_streempilot_fleet.py \
             scripts/publish_hypesiege_streempilot_fleet.py \
-            scripts/test_publish_hypesiege_streempilot_fleet.py; then
+            scripts/test_publish_hypesiege_streempilot_fleet.py \
+            scripts/test_hypesiege_streempilot_publisher_hardening.py \
+            scripts/render_hypesiege_streempilot_plan.py \
+            scripts/test_hypesiege_streempilot_plan_browser.py; then
             echo 'conflict markers found' >&2
             exit 1
           fi
@@ -151,7 +186,70 @@ jobs:
           if grep -RInE "$credential_pattern" \
             .github/workflows/repository-fleets.yml \
             scripts/reconstruct_hypesiege_streempilot_fleet.py \
-            scripts/test_publish_hypesiege_streempilot_fleet.py; then
+            scripts/test_publish_hypesiege_streempilot_fleet.py \
+            scripts/test_hypesiege_streempilot_publisher_hardening.py \
+            scripts/render_hypesiege_streempilot_plan.py \
+            scripts/test_hypesiege_streempilot_plan_browser.py; then
             echo 'live organization credentials must not be wired into validation CI' >&2
             exit 1
           fi
+          if grep -nE '\$\{\{[[:space:]]*secrets\.' \
+            .github/workflows/repository-fleets.yml; then
+            echo 'validation CI must not consume repository secrets' >&2
+            exit 1
+          fi
+          if grep -nE '^[[:space:]]+[A-Za-z-]+:[[:space:]]*write([[:space:]]|$)' \
+            .github/workflows/repository-fleets.yml; then
+            echo 'validation CI must remain read-only' >&2
+            exit 1
+          fi
+          python - <<'PY'
+          import pathlib
+          import re
+
+          workflow = pathlib.Path(
+              ".github/workflows/repository-fleets.yml"
+          ).read_text(encoding="utf-8")
+          references = re.findall(r"uses:\s*[^@\s]+@([^\s#]+)", workflow)
+          assert references
+          assert all(re.fullmatch(r"[0-9a-f]{40}", ref) for ref in references), references
+          PY
+
+  hypesiege-streempilot-browser:
+    needs: hypesiege-streempilot
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONHASHSEED: "0"
+      TZ: UTC
+      LC_ALL: C.UTF-8
+      BROWSER_ARTIFACT_DIR: browser-artifacts
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Install pinned Chrome for Testing and ChromeDriver
+        id: chrome
+        uses: browser-actions/setup-chrome@73954683cc80eced513145a42b668b9b91f753c3 # v2.1.2
+        with:
+          chrome-version: 151.0.7922.71
+          install-dependencies: true
+          install-chromedriver: true
+      - name: Exercise the read-only operator plan in a real browser
+        env:
+          CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
+          CHROMEDRIVER_BIN: ${{ steps.chrome.outputs.chromedriver-path }}
+        run: |
+          python -m unittest -v \
+            scripts/test_hypesiege_streempilot_plan_browser.py
+      - name: Preserve browser evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hypesiege-streempilot-browser-evidence
+          path: browser-artifacts
+          if-no-files-found: warn
+          retention-days: 7
