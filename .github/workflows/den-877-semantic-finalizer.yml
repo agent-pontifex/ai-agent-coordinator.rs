@@ -1,0 +1,188 @@
+name: DEN-877 semantic fleet finalizer
+
+on:
+  push:
+    branches:
+      - agent/den-877-final-reconciliation-v2
+    paths:
+      - .github/workflows/den-877-semantic-finalizer.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: den-877-semantic-finalizer
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    if: github.repository == 'ORESoftware/ai-agent-coordinator.rs'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact writable branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: agent/den-877-final-reconciliation-v2
+          fetch-depth: 0
+          persist-credentials: true
+          show-progress: false
+
+      - name: Apply semantic fleet repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          old_digest = '50629a57beca1ac85928cfae8fbebbca4f62a6455a7013016f92b1203dcbbd1f'
+          reviewed_digest = 'a57b00961ee57ae09bf3bb2e2d09afbdd1ddbbbde832b027802f82a1fc5dfa84'
+
+          digest_paths = [
+              Path('scripts/reconstruct_hypesiege_streempilot_fleet.py'),
+              Path('scripts/publish_hypesiege_streempilot_fleet.py'),
+              Path('repository-fleets/hypesiege-streempilot.json'),
+              Path('docs/hypesiege-streempilot-repository-publication.md'),
+          ]
+          for path in digest_paths:
+              text = path.read_text(encoding='utf-8')
+              if old_digest not in text and reviewed_digest not in text:
+                  raise SystemExit(f'generator identity is absent from {path}')
+              path.write_text(text.replace(old_digest, reviewed_digest), encoding='utf-8')
+
+          reconstructor_path = Path('scripts/reconstruct_hypesiege_streempilot_fleet.py')
+          reconstructor = reconstructor_path.read_text(encoding='utf-8')
+
+          root_block = '''    expected_literal = "ROOT = Path('/mnt/data/hypesiege-streempilot-fleet')"
+              replacement = f"ROOT = Path({str(output_root)!r})"
+              if source.count(expected_literal) != 1:
+                  raise ReconstructionError("generator output-root contract changed")
+              source = source.replace(expected_literal, replacement)
+          '''
+          root_block = '\n'.join(line[10:] if line.startswith('          ') else line for line in root_block.splitlines()) + '\n'
+          relocated_block = '''    expected_literal = "ROOT = Path('/mnt/data/hypesiege-streempilot-fleet')"
+              replacement = f"ROOT = Path({str(output_root)!r})"
+              if source.count(expected_literal) != 1:
+                  raise ReconstructionError("generator output-root contract changed")
+              source = source.replace(expected_literal, replacement)
+
+              archive_literal = "/mnt/data/hypesiege-streempilot-fleet.tar.gz"
+              if archive_literal not in source:
+                  raise ReconstructionError("generator archive-output contract changed")
+              source = source.replace(
+                  archive_literal,
+                  str(output_root.parent / f"{output_root.name}.tar.gz"),
+              )
+
+              checksum_literal = "/mnt/data/hypesiege-streempilot-fleet.SHA256"
+              if checksum_literal not in source:
+                  raise ReconstructionError("generator checksum-output contract changed")
+              source = source.replace(
+                  checksum_literal,
+                  str(output_root.parent / f"{output_root.name}.SHA256"),
+              )
+          '''
+          relocated_block = '\n'.join(line[10:] if line.startswith('          ') else line for line in relocated_block.splitlines()) + '\n'
+          if 'archive_literal = "/mnt/data/hypesiege-streempilot-fleet.tar.gz"' not in reconstructor:
+              if reconstructor.count(root_block) != 1:
+                  raise SystemExit('generator output-root block drifted')
+              reconstructor = reconstructor.replace(root_block, relocated_block, 1)
+
+          cleanup_block = '''    stale_archive = output_root.parent / f"{output_root.name}.tar.gz"
+              stale_archive.unlink(missing_ok=True)
+              stale_archive.with_suffix(stale_archive.suffix + ".SHA256").unlink(missing_ok=True)
+          '''
+          cleanup_block = '\n'.join(line[10:] if line.startswith('          ') else line for line in cleanup_block.splitlines()) + '\n'
+          corrected_cleanup = '''    stale_archive = output_root.parent / f"{output_root.name}.tar.gz"
+              stale_checksum = output_root.parent / f"{output_root.name}.SHA256"
+              stale_archive.unlink(missing_ok=True)
+              stale_checksum.unlink(missing_ok=True)
+          '''
+          corrected_cleanup = '\n'.join(line[10:] if line.startswith('          ') else line for line in corrected_cleanup.splitlines()) + '\n'
+          if 'stale_checksum = output_root.parent / f"{output_root.name}.SHA256"' not in reconstructor:
+              if reconstructor.count(cleanup_block) != 1:
+                  raise SystemExit('generated-artifact cleanup block drifted')
+              reconstructor = reconstructor.replace(cleanup_block, corrected_cleanup, 1)
+
+          reconstructor_path.write_text(reconstructor, encoding='utf-8')
+
+          docs_path = Path('docs/hypesiege-streempilot-repository-publication.md')
+          docs = docs_path.read_text(encoding='utf-8')
+          paragraph = (
+              'The superseded `deploy/k8s/bootstrap` all-at-once publisher and its bundled '
+              'generator were removed during semantic reconciliation. That job accepted a broad '
+              'repository-administration credential and attempted the entire fleet in one '
+              'execution, contradicting the canonical one-repository confirmation, preflight, '
+              'and remote-head verification boundary.\n\n'
+          )
+          marker = '## Reconstruct and validate locally\n'
+          if paragraph not in docs:
+              if marker not in docs:
+                  raise SystemExit('publication documentation insertion point is missing')
+              docs = docs.replace(marker, paragraph + marker, 1)
+          docs_path.write_text(docs, encoding='utf-8')
+
+          for path in [
+              Path('deploy/k8s/bootstrap/hypesiege-streempilot-bootstrap-job.yaml'),
+              Path('deploy/k8s/bootstrap/kustomization.yaml'),
+              *[
+                  Path(f'deploy/k8s/bootstrap/generate.py.gz.b64.part-{index:02d}')
+                  for index in range(7)
+              ],
+          ]:
+              path.unlink(missing_ok=True)
+          PY
+
+      - name: Reconstruct twice and validate the semantic result
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            scripts/reconstruct_hypesiege_streempilot_fleet.py \
+            scripts/publish_hypesiege_streempilot_fleet.py \
+            scripts/test_publish_hypesiege_streempilot_fleet.py
+          rm -rf "$RUNNER_TEMP/fleet-a" "$RUNNER_TEMP/fleet-b"
+          python3 scripts/reconstruct_hypesiege_streempilot_fleet.py \
+            --output-root "$RUNNER_TEMP/fleet-a" \
+            --manifest-out repository-fleets/hypesiege-streempilot.json
+          python3 scripts/reconstruct_hypesiege_streempilot_fleet.py \
+            --output-root "$RUNNER_TEMP/fleet-b" \
+            --manifest-out "$RUNNER_TEMP/fleet-b-manifest.json"
+          cmp repository-fleets/hypesiege-streempilot.json "$RUNNER_TEMP/fleet-b-manifest.json"
+          python3 -m unittest -v scripts/test_publish_hypesiege_streempilot_fleet.py
+          python3 scripts/publish_hypesiege_streempilot_fleet.py \
+            --fleet-root "$RUNNER_TEMP/fleet-a" \
+            --manifest repository-fleets/hypesiege-streempilot.json \
+            --org hypesiege \
+            --repository hypesiege-analytics.rs >/dev/null
+          python3 scripts/publish_hypesiege_streempilot_fleet.py \
+            --fleet-root "$RUNNER_TEMP/fleet-a" \
+            --manifest repository-fleets/hypesiege-streempilot.json \
+            --org streempilot \
+            --repository streempilot-api-server.rs >/dev/null
+          test -z "$(git grep -l '50629a57beca1ac85928cfae8fbebbca4f62a6455a7013016f92b1203dcbbd1f' -- ':!.github/workflows/den-877-semantic-finalizer.yml' || true)"
+          git diff --check
+          if git grep -nE '^(<<<<<<< |=======|>>>>>>> )'; then
+            echo 'unresolved conflict marker detected' >&2
+            exit 1
+          fi
+
+      - name: Commit validated product changes only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            scripts/reconstruct_hypesiege_streempilot_fleet.py \
+            scripts/publish_hypesiege_streempilot_fleet.py \
+            repository-fleets/hypesiege-streempilot.json \
+            docs/hypesiege-streempilot-repository-publication.md
+          git add -A deploy/k8s/bootstrap
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo 'Canonical product tree was already reconciled.'
+            exit 0
+          fi
+          git commit -m 'fix(DEN-877): finalize deterministic fleet contract'
+          git push origin HEAD:agent/den-877-final-reconciliation-v2
