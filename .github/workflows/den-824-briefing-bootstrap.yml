@@ -6,12 +6,14 @@ on:
       - agent/den-824-daily-portfolio-briefing-core
     paths:
       - '.github/den-824-briefing-payload.tar.xz.b64'
+      - '.github/den-824-briefing-payload.part-*'
       - '.github/workflows/den-824-briefing-bootstrap.yml'
   pull_request:
     branches:
       - main
     paths:
       - '.github/den-824-briefing-payload.tar.xz.b64'
+      - '.github/den-824-briefing-payload.part-*'
       - '.github/workflows/den-824-briefing-bootstrap.yml'
   workflow_dispatch:
 
@@ -40,10 +42,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          payload=.github/den-824-briefing-payload.tar.xz.b64
-          base64 --decode "$payload" > /tmp/den-824-briefing.tar.xz
+          cat .github/den-824-briefing-payload.part-* \
+            | base64 --decode > /tmp/den-824-briefing.tar.xz
           printf '%s  %s\n' \
-            '64535765c2e4e2ad13f868f918aff552127e2ec1c6fc49b7c273865d3b759841' \
+            '6b4716484ae348685d896d79844ccc22d2581dbc88e76ba27d30f660f452dd92' \
             /tmp/den-824-briefing.tar.xz | sha256sum --check --strict
           tar --list --xz --file /tmp/den-824-briefing.tar.xz | sort > /tmp/actual-paths
           cat > /tmp/expected-paths <<'EOF'
@@ -125,11 +127,13 @@ jobs:
           python scripts/validate_agents_md.py --repo-root . --start-dir tools
           rm -f \
             .github/den-824-briefing-payload.tar.xz.b64 \
+            .github/den-824-briefing-payload.part-* \
             .github/workflows/den-824-briefing-bootstrap.yml
           mapfile -t changed < <(git status --porcelain=v1 | cut -c4- | sort)
           for path in "${changed[@]}"; do
             case "$path" in
               .github/den-824-briefing-payload.tar.xz.b64|\
+              .github/den-824-briefing-payload.part-*|\
               .github/workflows/den-824-briefing-bootstrap.yml|\
               .github/workflows/daily-portfolio-briefing.yml|\
               docs/daily-portfolio-briefing.md|\
