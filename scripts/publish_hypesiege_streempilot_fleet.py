@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Safely create and push one deterministic HypeSiege/StreemPilot repository.
+"""Fail-closed publisher for one deterministic HypeSiege/StreemPilot repository.
 
-Planning is network-free. Live execution is intentionally one repository at a
-time and requires exact confirmation plus a short-lived, least-privilege GitHub
-App installation token supplied only through the environment.
+Plan mode is credential-free and network-free. Execute mode requires one exact
+repository confirmation, an independently reconstructed source tree, and a
+short-lived least-privilege GitHub App installation token supplied only through
+the environment.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import pathlib
@@ -19,6 +21,7 @@ import subprocess
 import tempfile
 import urllib.error
 import urllib.request
+from collections.abc import Iterable
 from typing import Any
 
 API_BASE = "https://api.github.com"
@@ -28,6 +31,8 @@ TOKEN_ENV = "GITHUB_REPOSITORY_ADMIN_TOKEN"
 ALLOWED_ORGS = frozenset({"hypesiege", "streempilot"})
 EXPECTED_ORGANIZATIONS = {"hypesiege": 15, "streempilot": 17}
 EXPECTED_GENERATOR_SHA256 = "a57b00961ee57ae09bf3bb2e2d09afbdd1ddbbbde832b027802f82a1fc5dfa84"
+EXPECTED_GENERATED_AT = "2026-07-31T00:00:00-04:00"
+EXPECTED_PUBLICATION_STATUS = "deterministic histories sealed; remote authorization required"
 EXPECTED_REPOSITORIES = 32
 EXPECTED_FILES = 888
 EXPECTED_GITLINKS = 30
@@ -82,7 +87,27 @@ REPOSITORY_SETTINGS = {
 
 
 class PublicationError(RuntimeError):
-    """Fail-closed publication error."""
+    """The requested publication violated a reviewed invariant."""
+
+
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Never forward authorization to a redirect target."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        return None
+
+
+def sanitize_detail(value: object, *, token: str | None = None) -> str:
+    detail = str(value)
+    if token:
+        detail = detail.replace(token, "[REDACTED]")
+    for pattern in SECRET_PATTERNS:
+        detail = pattern.sub("[REDACTED]", detail)
+    detail = "".join(
+        character if character in "\n\t" or ord(character) >= 32 else "?"
+        for character in detail
+    )
+    return detail.strip()[:MAX_ERROR_DETAIL_BYTES]
 
 
 class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -144,6 +169,7 @@ def run(
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        timeout=120,
     )
     if completed.returncode not in allowed_returncodes:
         detail = (completed.stderr or completed.stdout).strip()[:MAX_ERROR_BYTES]
@@ -289,11 +315,7 @@ def load_manifest(path: pathlib.Path) -> dict[str, Any]:
 
 
 def select_record(manifest: dict[str, Any], full_name: str) -> dict[str, Any]:
-    matches = [
-        record
-        for record in manifest["repositories"]
-        if record.get("full_name") == full_name
-    ]
+    matches = [record for record in manifest["repositories"] if record["full_name"] == full_name]
     if len(matches) != 1:
         raise PublicationError(f"manifest must contain exactly one {full_name!r} record")
     return validate_record(matches[0])
@@ -471,9 +493,7 @@ def preflight_source(
     if checks["branch"] != "main":
         raise PublicationError(f"{record['full_name']} is not on main")
     if checks["head"] != record["commit"]:
-        raise PublicationError(
-            f"{record['full_name']} head mismatch: {checks['head']} != {record['commit']}"
-        )
+        raise PublicationError(f"{record['full_name']} head mismatch")
     if checks["origin"] != record["remote"]:
         raise PublicationError(f"{record['full_name']} origin mismatch")
     if checks["remotes"] != ["origin"]:
@@ -628,10 +648,9 @@ def request_json(
                 f"GitHub API redirect rejected for {method} {path}"
             ) from error
         raise PublicationError(
-            f"GitHub API {error.code} for {method} {path}: {raw}"
+            f"GitHub API unavailable for {method} {path}: "
+            f"{sanitize_detail(reason, token=token)}"
         ) from error
-    except urllib.error.URLError as error:
-        raise PublicationError(f"GitHub API unavailable for {method} {path}: {error}") from error
 
 
 def validate_repository_metadata(
@@ -744,9 +763,7 @@ def remote_main_commit(full_name: str, token: str) -> str | None:
 
 
 def verify_monorepo_children(
-    manifest: dict[str, Any],
-    record: dict[str, Any],
-    token: str,
+    manifest: dict[str, Any], record: dict[str, Any], token: str
 ) -> None:
     if record["kind"] != "monorepo":
         return
@@ -812,6 +829,7 @@ def push_main(repo: pathlib.Path, remote: str, token: str) -> None:
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            timeout=120,
         )
         if completed.returncode != 0:
             detail = (completed.stderr or completed.stdout).strip()[:MAX_ERROR_BYTES]
@@ -868,6 +886,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repository", required=True, help="exact owner/name")
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--confirm-repository")
+    parser.add_argument("--report-out", type=pathlib.Path)
     return parser.parse_args()
 
 
@@ -875,28 +894,25 @@ def main() -> int:
     args = parse_args()
     manifest = load_manifest(args.manifest)
     record = select_record(manifest, args.repository)
-
-    print(
-        json.dumps(
-            {
-                "mode": "execute" if args.execute else "plan",
-                "repository": record["full_name"],
-                "commit": record["commit"],
-                "visibility": record["visibility"],
-                "remote": record["remote"],
-                "files": record["files"],
-                "gitlinks": record["gitlinks"],
-            },
-            indent=2,
-        )
-    )
-
+    plan = {
+        "mode": "execute" if args.execute else "plan",
+        "repository": record["full_name"],
+        "commit": record["commit"],
+        "visibility": record["visibility"],
+        "remote": record["remote"],
+        "files": record["files"],
+        "gitlinks": record["gitlinks"],
+    }
+    print(json.dumps(plan, indent=2))
     if not args.execute:
+        if args.report_out:
+            write_json_atomic(
+                args.report_out,
+                {**plan, "manifest_sha256": manifest_digest(args.manifest), "network_mutation": False},
+            )
         return 0
     if args.confirm_repository != record["full_name"]:
-        raise PublicationError(
-            "--confirm-repository must exactly equal the requested owner/name"
-        )
+        raise PublicationError("--confirm-repository must exactly equal the requested owner/name")
     if args.source_root is None:
         raise PublicationError("--source-root is required in execute mode")
     repo = preflight_source(manifest, record, args.source_root)

@@ -4,10 +4,13 @@ on:
   pull_request:
     paths:
       - repository-fleets/**
+      - browser-tests/requirements-den877.txt
+      - browser-tests/test_hypesiege_streempilot_audit_report.py
       - scripts/render_repository_fleet.py
       - scripts/test_render_repository_fleet.py
       - scripts/reconstruct_hypesiege_streempilot_fleet.py
       - scripts/publish_hypesiege_streempilot_fleet.py
+      - scripts/render_hypesiege_streempilot_audit_report.py
       - scripts/test_publish_hypesiege_streempilot_fleet.py
       - scripts/test_hypesiege_streempilot_publisher_hardening.py
       - scripts/render_hypesiege_streempilot_plan.py
@@ -20,10 +23,13 @@ on:
     branches: [main]
     paths:
       - repository-fleets/**
+      - browser-tests/requirements-den877.txt
+      - browser-tests/test_hypesiege_streempilot_audit_report.py
       - scripts/render_repository_fleet.py
       - scripts/test_render_repository_fleet.py
       - scripts/reconstruct_hypesiege_streempilot_fleet.py
       - scripts/publish_hypesiege_streempilot_fleet.py
+      - scripts/render_hypesiege_streempilot_audit_report.py
       - scripts/test_publish_hypesiege_streempilot_fleet.py
       - scripts/test_hypesiege_streempilot_publisher_hardening.py
       - scripts/render_hypesiege_streempilot_plan.py
@@ -42,6 +48,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  workflow-policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Validate this workflow with pinned actionlint
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/repo" \
+            --workdir /repo \
+            rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 \
+            .github/workflows/repository-fleets.yml
+
   memebank:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -127,6 +150,8 @@ jobs:
             scripts/test_hypesiege_streempilot_publisher_hardening.py
       - name: Render representative network-free plans
         shell: bash
+        env:
+          GITHUB_REPOSITORY_ADMIN_TOKEN: ""
         run: |
           set -euo pipefail
           python scripts/publish_hypesiege_streempilot_fleet.py \
@@ -138,8 +163,13 @@ jobs:
           python scripts/render_hypesiege_streempilot_plan.py \
             --output operator-plan.html
           python - <<'PY'
+          from __future__ import annotations
+
           import json
-          from pathlib import Path
+          import os
+          import pathlib
+          import subprocess
+          import sys
 
           hypesiege = json.loads(Path("hypesiege-plan.json").read_text())
           streempilot = json.loads(Path("streempilot-plan.json").read_text())
