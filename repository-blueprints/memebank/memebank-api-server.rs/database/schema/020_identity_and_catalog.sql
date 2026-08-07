@@ -77,6 +77,7 @@ CREATE TABLE memebank.asset_variants (
     frame_index integer CHECK (frame_index >= 0),
     revision bigint NOT NULL DEFAULT 0 CHECK (revision >= 0),
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     UNIQUE (library_id, id),
     UNIQUE (asset_id, kind, recipe, frame_index),
     FOREIGN KEY (library_id, asset_id)
