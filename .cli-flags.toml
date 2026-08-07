@@ -239,6 +239,13 @@ type = "string"
 default = "https://api.github.com"
 help = "GitHub API base URL; HTTPS is required except loopback HTTP in tests."
 
+[flags.github-api-allowed-hosts]
+env = "GITHUB_API_ALLOWED_HOSTS"
+aliases = ["github-api-allowed-hosts"]
+type = "string"
+default = "api.github.com"
+help = "Comma-separated exact HTTPS hosts allowed to receive the GitHub administration credential."
+
 [flags.github-api-version]
 env = "GITHUB_API_VERSION"
 aliases = ["github-api-version"]

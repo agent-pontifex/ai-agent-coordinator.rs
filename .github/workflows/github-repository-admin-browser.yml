@@ -1,0 +1,202 @@
+name: GitHub repository admin browser E2E
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/github-repository-admin-browser.yml'
+      - '.cli-flags.toml'
+      - '.env.example'
+      - 'deploy/k8s/deployment.yaml'
+      - 'docs/cli-flags.md'
+      - 'docs/github-repository-administration-security.md'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'src/app.rs'
+      - 'src/error.rs'
+      - 'src/github_admin.rs'
+      - 'src/main.rs'
+      - 'tests/browser/**'
+      - 'tests/fixtures/ai_agent_coordinator.schema.sql'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/github-repository-admin-browser.yml'
+      - '.cli-flags.toml'
+      - '.env.example'
+      - 'deploy/k8s/deployment.yaml'
+      - 'docs/cli-flags.md'
+      - 'docs/github-repository-administration-security.md'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'src/app.rs'
+      - 'src/error.rs'
+      - 'src/github_admin.rs'
+      - 'src/main.rs'
+      - 'tests/browser/**'
+      - 'tests/fixtures/ai_agent_coordinator.schema.sql'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-repository-admin-browser-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: '0'
+  RUST_BACKTRACE: '1'
+  POSTGRES_TEST_IMAGE: postgres:17.9-bookworm@sha256:47f917f7409eacd22fc5dfb1dee634e1b55cf0c01d1a7eb701be2227a03e0641
+
+jobs:
+  browser-e2e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:17.9-bookworm@sha256:47f917f7409eacd22fc5dfb1dee634e1b55cf0c01d1a7eb701be2227a03e0641
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: coordinator
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --username postgres --dbname coordinator"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      AI_AGENT_COORDINATOR_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/coordinator
+      COORDINATOR_BIN: ${{ github.workspace }}/target/debug/ai-agent-coordinator
+    steps:
+      - name: Checkout coordinator
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate workflow syntax
+        uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+        with:
+          args: .github/workflows/github-repository-admin-browser.yml
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: '1.97.1'
+          components: rustfmt, clippy
+
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: tests/browser/requirements.txt
+
+      - name: Initialize private evidence directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          artifact_dir="$RUNNER_TEMP/github-repository-admin-browser"
+          mkdir -p "$artifact_dir"
+          chmod 700 "$artifact_dir"
+          echo "PLAYWRIGHT_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+
+      - name: Verify and apply the canonical PostgreSQL schema fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          schema="$GITHUB_WORKSPACE/tests/fixtures/ai_agent_coordinator.schema.sql"
+          test -f "$schema"
+          actual="$(sha256sum "$schema" | awk '{print $1}')"
+          expected='bb6162034600fe7e3f3566375f96c4624214566bc63cdb9c060aa875727eac87'
+          test "$actual" = "$expected"
+          docker run --rm \
+            --network host \
+            --env PGPASSWORD=postgres \
+            --volume "$schema:/schema.sql:ro" \
+            "$POSTGRES_TEST_IMAGE" \
+            psql \
+              --host 127.0.0.1 \
+              --username postgres \
+              --dbname coordinator \
+              --set ON_ERROR_STOP=1 \
+              --file /schema.sql
+
+      - name: Enforce Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Lint all Rust targets and features
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Run repository-administration unit tests
+        run: cargo test --locked --all github_admin -- --nocapture
+
+      - name: Build the real coordinator binary
+        run: cargo build --locked --bin ai-agent-coordinator
+
+      - name: Install pinned Playwright and Chromium
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install \
+            --disable-pip-version-check \
+            --no-compile \
+            --no-deps \
+            --only-binary=:all: \
+            --requirement tests/browser/requirements.txt
+          python -m pip check
+          python -m playwright --version \
+            | tee "$PLAYWRIGHT_ARTIFACT_DIR/playwright-version.txt"
+          python -m playwright install --with-deps chromium
+
+      - name: Run Chromium against the real repository-admin route
+        shell: bash
+        run: >-
+          timeout --signal=TERM --kill-after=20s 12m
+          python tests/browser/test_github_repository_admin.py -v
+
+      - name: Record exact tested revisions
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg commit "$GITHUB_SHA" \
+            --arg postgres_image "$POSTGRES_TEST_IMAGE" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            '{
+              schema_version: 1,
+              coordinator_commit: $commit,
+              postgres_image: $postgres_image,
+              workflow_run_id: $run_id,
+              workflow_run_attempt: $run_attempt
+            }' > "$PLAYWRIGHT_ARTIFACT_DIR/revisions.json"
+
+      - name: Publish browser-test summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## GitHub repository administration browser E2E'
+            echo
+            echo "- Coordinator: \`${GITHUB_SHA}\`"
+            echo "- Run attempt: \`${GITHUB_RUN_ATTEMPT}\`"
+            echo "- Evidence artifact: \`github-repository-admin-browser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}\`"
+            echo '- Coverage: dry-run isolation, exact confirmation, allowlist, live create, race recovery, response identity, visibility, trusted-link derivation, bounded responses, credential redaction, redirect denial, no-store headers, and request IDs.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Chromium evidence and coordinator logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: github-repository-admin-browser-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/github-repository-admin-browser
+          if-no-files-found: error
+          retention-days: 14
