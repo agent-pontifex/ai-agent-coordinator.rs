@@ -10,3 +10,7 @@ node_modules/
 playwright-report/
 test-results/
 .artifacts/
+tmp
+temp
+tmp/worktrees
+temp/worktrees
