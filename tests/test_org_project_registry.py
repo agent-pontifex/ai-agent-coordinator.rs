@@ -27,8 +27,8 @@ class OrgProjectRegistryTest(unittest.TestCase):
 
     def test_checked_in_registry_is_valid(self) -> None:
         counts = registry_module.validate_registry(self.registry)
-        self.assertEqual(counts["mappings"], 30)
-        self.assertEqual(counts["repository_overrides"], 6)
+        self.assertEqual(counts["mappings"], 31)
+        self.assertEqual(counts["repository_overrides"], 5)
         self.assertEqual(counts["runtime_routes"], 13)
         self.assertEqual(counts["unmapped"], 7)
 
@@ -149,6 +149,17 @@ class OrgProjectRegistryTest(unittest.TestCase):
             self.registry, "ORESoftware", "ORESoftware/k8s-cluster"
         )
         self.assertEqual(project["project_id"], "18c58338-cf36-4fe6-8c71-245a795f8661")
+
+    def test_fanwaave_push_server_uses_owner_project(self) -> None:
+        project = registry_module.resolve_project(
+            self.registry,
+            "fanwaave",
+            "fanwaave/push-notification-server.rs",
+        )
+        self.assertEqual(
+            project["project_id"],
+            "d765e227-5726-42c8-8643-a8bd9e5a9a8c",
+        )
 
     def test_repository_cannot_escape_resolved_owner(self) -> None:
         with self.assertRaisesRegex(registry_module.RegistryError, "does not match"):
