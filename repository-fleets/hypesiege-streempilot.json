@@ -1,11 +1,7 @@
 {
-  "schema_version": 2,
+  "default_branch": "main",
   "generated_at": "2026-07-31T00:00:00-04:00",
   "generator_sha256": "a57b00961ee57ae09bf3bb2e2d09afbdd1ddbbbde832b027802f82a1fc5dfa84",
-  "default_branch": "main",
-  "repository_count": 32,
-  "total_tracked_files": 888,
-  "total_gitlinks": 30,
   "organizations": {
     "hypesiege": 15,
     "streempilot": 17
@@ -427,6 +423,36 @@
       "visibility": "public",
       "default_branch": "main",
       "gitlinks": 16
+    },
+    {
+      "org": "hypesiege",
+      "name": "hypesiege-monorepo",
+      "full_name": "hypesiege/hypesiege-monorepo",
+      "kind": "monorepo",
+      "commit": "9fb1ba2a57a7509be162ec1ca4eeb794ec910bbb",
+      "files": 41,
+      "remote": "https://github.com/hypesiege/hypesiege-monorepo.git",
+      "description": "Contributor and integration superproject for the HypeSiege social publishing platform.",
+      "visibility": "public",
+      "default_branch": "main",
+      "gitlinks": 14
+    },
+    {
+      "org": "streempilot",
+      "name": "streempilot-monorepo",
+      "full_name": "streempilot/streempilot-monorepo",
+      "kind": "monorepo",
+      "commit": "0e83a0dfa1c2f5c4a20c50c8b6f7d1453a24cc07",
+      "files": 43,
+      "remote": "https://github.com/streempilot/streempilot-monorepo.git",
+      "description": "Contributor and integration superproject for the StreemPilot live-production platform.",
+      "visibility": "public",
+      "default_branch": "main",
+      "gitlinks": 16
     }
-  ]
+  ],
+  "repository_count": 32,
+  "schema_version": 2,
+  "total_gitlinks": 30,
+  "total_tracked_files": 888
 }
