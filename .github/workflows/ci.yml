@@ -22,7 +22,6 @@ jobs:
           persist-credentials: false
       - name: Validate GitHub Actions
         id: actionlint
-        continue-on-error: true
         shell: bash
         run: |
           set -o pipefail
@@ -32,7 +31,7 @@ jobs:
             rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 \
             .github/workflows/ci.yml 2>&1 | tee actionlint-output.log
       - name: Upload failing actionlint output
-        if: steps.actionlint.outcome == 'failure'
+        if: always() && steps.actionlint.outcome == 'failure'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: actionlint-output
@@ -44,36 +43,28 @@ jobs:
           toolchain: '1.97.0'
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-      - name: Apply canonical Rust formatting for validation
+      - name: Verify canonical Rust formatting
         id: format
-        continue-on-error: true
         shell: bash
         run: |
           set -o pipefail
-          cargo fmt --all 2>&1 | tee rustfmt-command.log
-          if ! git diff --quiet -- src tests; then
-            echo 'changed=true' >> "$GITHUB_OUTPUT"
-          fi
+          cargo fmt --all --check 2>&1 | tee rustfmt-command.log
       - name: Upload formatter diagnostics
-        if: steps.format.outputs.changed == 'true' || steps.format.outcome == 'failure'
+        if: always() && steps.format.outcome == 'failure'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: rustfmt-output
-          path: |
-            rustfmt-command.log
-            src/**/*.rs
-            tests/**/*.rs
+          path: rustfmt-command.log
           retention-days: 1
           if-no-files-found: error
       - name: Clippy
         id: clippy
-        continue-on-error: true
         shell: bash
         run: |
           set -o pipefail
           cargo clippy --locked --all-targets --all-features -- -D warnings 2>&1 | tee clippy-output.log
       - name: Upload failing Clippy output
-        if: steps.clippy.outcome == 'failure'
+        if: always() && steps.clippy.outcome == 'failure'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: clippy-output
@@ -82,13 +73,12 @@ jobs:
           if-no-files-found: error
       - name: Test
         id: test
-        continue-on-error: true
         shell: bash
         run: |
           set -o pipefail
           cargo test --locked --all 2>&1 | tee test-output.log
       - name: Upload failing test output
-        if: steps.test.outcome == 'failure'
+        if: always() && steps.test.outcome == 'failure'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: rust-test-output
@@ -97,12 +87,14 @@ jobs:
           if-no-files-found: error
       - name: Documentation
         id: docs
-        continue-on-error: true
         run: cargo doc --locked --no-deps
       - name: Release build
         id: release
-        continue-on-error: true
         run: cargo build --locked --release
+      # Defence in depth: every gate above already fails the job directly. This
+      # step additionally fails if a gate was skipped, cancelled, or silently
+      # loses its enforcement (e.g. a future `continue-on-error`), and asserts
+      # that no step mutated the tracked worktree.
       - name: Require all validation gates
         if: always()
         env:
@@ -114,13 +106,14 @@ jobs:
           RELEASE_OUTCOME: ${{ steps.release.outcome }}
         shell: bash
         run: |
+          set -euo pipefail
           test "$ACTIONLINT_OUTCOME" = success
           test "$FORMAT_OUTCOME" = success
           test "$CLIPPY_OUTCOME" = success
           test "$TEST_OUTCOME" = success
           test "$DOCS_OUTCOME" = success
           test "$RELEASE_OUTCOME" = success
-          git diff --exit-code -- src tests
+          git diff --exit-code
 
   flags-contract:
     runs-on: ubuntu-latest

@@ -331,6 +331,61 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all
 ```
 
+## Cross-surface delivery
+
+This repository is an HTTP control-plane service, not the native Rust desktop
+app. User-visible or contract-changing job, lease, worker, budget, provider,
+incident, approval, intervention, notification, permission, navigation, or
+deep-link changes must be evaluated for:
+
+- `agent-pontifex/agent-pontifex-flutter` on Android, iOS, Flutter Web/mobile
+  web, and Flutter desktop when that proposed client is activated;
+- `agent-pontifex/agent-pontifex-desktop.rs`, the proposed Rust desktop/operator
+  client; and
+- Agent Pontifex SDK/interfaces, generated clients, job/lease/worker/budget/
+  incident/approval schemas, route types, synthetic incident fixtures, and
+  conformance tests.
+
+This is judgment-based coordination. Provider adapters, database/schema
+internals, secret scanning internals, telemetry plumbing, and worker-only lease
+mechanics may remain server-only. Native tray/background status, local worker
+discovery, secure storage, logs, and keyboard workflows may be desktop-specific.
+Job state, approvals, budget/quota status, intervention requests, incident state,
+worker health, permissions, errors, notifications, and navigation normally
+require coordinated changes or an explicit no-change rationale and parity
+follow-up.
+
+Mobile does not need every provider, repository, routing, or queue-management
+control. High-risk policy and execution operations may remain authenticated
+web/desktop-only while mobile receives status, notification, approval,
+pause/cancel, and deep-link workflows. The proposed client repositories must not
+be described as published until their remotes and builds are verified.
+
+Deep links are HTTPS-first:
+
+```text
+https://<verified-agent-pontifex-owned-host>/open/<route>?<bounded-query>
+```
+
+The exact host must be verified before publication. A custom-scheme fallback
+requires a reviewed ADR and must not be guessed. Control plane and future
+clients must share versioned route types and fixtures and support cold start,
+already-running delivery, authentication resume, replay/expiry rejection,
+browser fallback, and explicit confirmation or reauthentication before job
+execution, cancellation, retry, approval, policy, budget, provider, repository,
+or incident actions.
+
+Provider keys, GitHub tokens, webhook secrets, coordinator bearer tokens,
+repository source, private prompts, raw incident logs, secret-scan findings,
+worker credentials, database topology, and sensitive budget/usage details are
+prohibited in URLs. Use bounded identifiers or short-lived, single-use,
+audience-bound codes and validate route version, org/repo/job/worker/incident/
+approval identity, action, authorization, assurance level, limits, and user
+intent.
+
+See [`docs/CROSS_SURFACE_DELIVERY.md`](docs/CROSS_SURFACE_DELIVERY.md) and the
+[portfolio policy](https://github.com/ORESoftware/project-registry/blob/main/docs/cross-surface-delivery.md).
+
 ## License
 
 MIT
