@@ -1,0 +1,68 @@
+name: HypeSiege and StreemPilot publisher execution contracts
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/hypesiege-streempilot-publisher-execution-contracts.yml
+      - repository-fleets/hypesiege-streempilot.json
+      - scripts/publish_hypesiege_streempilot_fleet.py
+      - scripts/test_publish_hypesiege_streempilot_fleet.py
+      - scripts/test_publish_hypesiege_streempilot_execution.py
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/hypesiege-streempilot-publisher-execution-contracts.yml
+      - repository-fleets/hypesiege-streempilot.json
+      - scripts/publish_hypesiege_streempilot_fleet.py
+      - scripts/test_publish_hypesiege_streempilot_fleet.py
+      - scripts/test_publish_hypesiege_streempilot_execution.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hypesiege-streempilot-publisher-contracts-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out reviewed source without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Compile publisher and contract suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            scripts/publish_hypesiege_streempilot_fleet.py \
+            scripts/test_publish_hypesiege_streempilot_fleet.py \
+            scripts/test_publish_hypesiege_streempilot_execution.py
+
+      - name: Run sealed fleet publisher contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/test_publish_hypesiege_streempilot_fleet.py -v
+          python3 scripts/test_publish_hypesiege_streempilot_execution.py -v
+
+      - name: Reject embedded GitHub credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -nE 'gh[pousr]_[A-Za-z0-9]{20,}' \
+            scripts/publish_hypesiege_streempilot_fleet.py \
+            scripts/test_publish_hypesiege_streempilot_fleet.py \
+            scripts/test_publish_hypesiege_streempilot_execution.py \
+            .github/workflows/hypesiege-streempilot-publisher-execution-contracts.yml
+          then
+            echo 'credential-shaped literal found in publisher contract surface' >&2
+            exit 1
+          fi

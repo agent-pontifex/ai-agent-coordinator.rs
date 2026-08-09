@@ -1,0 +1,80 @@
+name: MemeBank database blueprint
+
+on:
+  pull_request:
+    paths:
+      - repository-blueprints/memebank/memebank-api-server.rs/database/**
+      - repository-blueprints/memebank/memebank-api-server.rs/.github/workflows/database-contract.yml
+      - .github/workflows/memebank-database-blueprint.yml
+  push:
+    branches: [main]
+    paths:
+      - repository-blueprints/memebank/memebank-api-server.rs/database/**
+      - repository-blueprints/memebank/memebank-api-server.rs/.github/workflows/database-contract.yml
+      - .github/workflows/memebank-database-blueprint.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: repository-blueprints/memebank/memebank-api-server.rs/database
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Validate changed workflow syntax
+        uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+        with:
+          args: >-
+            .github/workflows/memebank-database-blueprint.yml
+            repository-blueprints/memebank/memebank-api-server.rs/.github/workflows/database-contract.yml
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Validate hierarchical agent instructions
+        run: >-
+          python ../../../../scripts/validate_agents_md.py
+          --repo-root .
+          --start-dir schema
+      - name: Compile schema tools
+        run: >-
+          python -m py_compile
+          scripts/render_schema.py
+          scripts/validate_schema.py
+          scripts/test_validate_schema.py
+      - name: Run desired-state contract gate
+        run: make agent-check
+      - name: Inspect deterministic schema report
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path('.artifacts/schema-report.json').read_text(encoding='utf-8'))
+          assert report['contract'] == 'memebank-postgresql-desired-state'
+          assert report['automatic_apply'] is False
+          assert len(report['schema_files']) == 9
+          assert len(report['tables']) == 27
+          assert set(report['vector_tables']) == {'384', '768', '1024'}
+          assert len(report['policies']) >= 40
+          PY
+      - uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4
+        with:
+          name: memebank-database-blueprint
+          path: |
+            repository-blueprints/memebank/memebank-api-server.rs/database/.artifacts/memebank-schema.sql
+            repository-blueprints/memebank/memebank-api-server.rs/database/.artifacts/schema-report.json
+          if-no-files-found: error
+          retention-days: 14

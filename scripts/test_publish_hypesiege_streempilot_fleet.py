@@ -173,7 +173,7 @@ class FleetManifestTests(unittest.TestCase):
                 for item in manifest["repositories"]
                 if item["full_name"] == "hypesiege/hypesiege-monorepo"
             )
-            repository = PUBLISHER.preflight_source(record, target)
+            repository = PUBLISHER.preflight_source(manifest, record, target)
             self.assertEqual(repository.name, "hypesiege-monorepo")
             self.assertEqual(len(PUBLISHER.staged_gitlinks(repository)), 14)
 

@@ -98,11 +98,11 @@ jobs:
               )
           )
           audit = json.loads((root / "rollout-audit.json").read_text(encoding="utf-8"))
-          assert index["owner_count"] == audit["registry"]["mapped_owners"] == 30
-          assert len(index["files"]) == 30
-          assert audit["summary"]["eligible_organizations"] == 29
+          assert index["owner_count"] == audit["registry"]["mapped_owners"] == 31
+          assert len(index["files"]) == 31
+          assert audit["summary"]["eligible_organizations"] == 30
           assert audit["summary"]["existing_public"] == 3
-          assert audit["summary"]["missing"] == 26
+          assert audit["summary"]["missing"] == 27
           assert audit["summary"]["unsupported_account_type"] == 1
           assert audit["summary"]["excluded_unmapped"] == 7
           for relative, expected in index["files"].items():
@@ -114,7 +114,7 @@ jobs:
               for owner in audit["owners"]
               if owner["bootstrap_dry_run"] is not None
           ]
-          assert len(requests) == 26
+          assert len(requests) == 27
           assert all(request["dry_run"] is True for request in requests)
           assert all("confirm_repository" not in request for request in requests)
           assert audit["bootstrap_contract"]["live_creation_authorized_by_this_artifact"] is False

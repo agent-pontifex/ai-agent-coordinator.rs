@@ -1,0 +1,72 @@
+name: DEN-1610 source reference
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/den-1610-source-reference.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: den-1610-source-reference-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact source head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: true
+
+      - name: Verify and extract the reviewed source bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin \
+            refs/heads/agent/den-1610-authenticated-adapters-v2:refs/remotes/origin/den-1610-source
+
+          mkdir -p artifacts/parts artifacts/source
+          for part in 00 01 02 03 04 05 06; do
+            git show "refs/remotes/origin/den-1610-source:.github/den-1610-patch/part-${part}" \
+              > "artifacts/parts/part-${part}"
+          done
+
+          sha256sum --check <<'PARTS'
+          70234a1cd04ab3d71f3790cd343e5e8ab3ab6de2b32a861af5b19bfc51060e28  artifacts/parts/part-00
+          a6dd98e23aa3e48dfa40d439bcc5b1ea3602e2bf523e5b59a80f0d293c05046c  artifacts/parts/part-01
+          69d258bcf9481b8998d60f18d603deffeaef74cb8366d0c819ab55bccbe12bd1  artifacts/parts/part-02
+          d3759476a93c958f4a21edf6a7bcfaedb94952835c317658de4633da4d75de58  artifacts/parts/part-03
+          139d2115de9dd04353a6d2082dca8f5d92d5227d65a91b361c5b9041f4d2cbfe  artifacts/parts/part-04
+          ea2b073d16b93203975ead4e609983d62a4cacdc014379f4aa80a8af99b4ca94  artifacts/parts/part-05
+          d4b8fd8e91f9a2838cdb26419072fa70ae59a3480092bf7dca2e0eff76926791  artifacts/parts/part-06
+          PARTS
+
+          cat artifacts/parts/part-* > artifacts/den-1610-source.tar.gz.b64
+          base64 --decode artifacts/den-1610-source.tar.gz.b64 \
+            > artifacts/den-1610-source.tar.gz
+          echo 'ee72cc9919ec7b5efbdbdecfa1c3b7ddb40db3dcc3f9bbb0f446260e122e916b  artifacts/den-1610-source.tar.gz' \
+            | sha256sum --check -
+          tar -xzf artifacts/den-1610-source.tar.gz -C artifacts/source
+
+          sha256sum --check <<'SOURCES'
+          bd534651a15a650012a06f5d33776da8f4e1faa8588103191cb4b29982f21d87  artifacts/source/src/prompt_reconciliation_adapters.rs
+          1317f9ee404312d9b007531efbc794c7c8d27270c3e1bbdfc92c262bcee7b217  artifacts/source/src/bin/prompt-reconciliation-apply.rs
+          a62df7e64bb4e63d1b4b4c20b8044654c69ee21e7714072adcb9b686561f166d  artifacts/source/src/prompt_reconciliation/model.rs
+          35003ee088ecedfebfcf825bffbd288d2d2a0df073808c62eb8d1a0b96fd8306  artifacts/source/src/lib.rs
+          f420ddf3a71f5562acc7fc46d970e39f82556442fa15398374218945226dbeaa  artifacts/source/docs/prompt-reconciliation-adapters.md
+          ce7d84defd8bfe868d412aee2193e9f0435054df4b0d4c084456f50cf5e486e3  artifacts/source/docs/prompt-reconciliation-apply-guard.md
+          SOURCES
+
+      - name: Upload verified source reference
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: den-1610-source-reference
+          path: artifacts/source/
+          if-no-files-found: error
+          retention-days: 1

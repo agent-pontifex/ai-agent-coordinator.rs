@@ -46,6 +46,7 @@ When no reviewed flags are supplied, the contract exports fail-closed operationa
 - `EMAIL_ATTENTION_LOCAL_MINUTE=0`
 - `GITHUB_REPOSITORY_ADMIN_ENABLED=false`
 - `GITHUB_API_BASE_URL=https://api.github.com`
+- `GITHUB_API_ALLOWED_HOSTS=api.github.com`
 - `GITHUB_API_VERSION=2022-11-28`
 - `GITHUB_API_USER_AGENT=ai-agent-coordinator`
 - `RUST_LOG=ai_agent_coordinator=info,tower_http=info`

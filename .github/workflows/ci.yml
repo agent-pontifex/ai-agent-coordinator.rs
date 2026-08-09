@@ -167,6 +167,7 @@ jobs:
             --github-repository-admin-enabled=false \
             --github-repository-admin-allowed-orgs=fiducia-cloud,sonus-auris \
             --github-api-base-url=https://api.github.com \
+            --github-api-allowed-hosts=api.github.com,github.example.test \
             --github-api-version=2022-11-28 \
             --github-api-user-agent=ai-agent-coordinator-ci \
             --log-filter=warn \
@@ -183,6 +184,7 @@ jobs:
               test "$GITHUB_REPOSITORY_ADMIN_ENABLED" = "false"
               test "$GITHUB_REPOSITORY_ADMIN_ALLOWED_ORGS" = "fiducia-cloud,sonus-auris"
               test "$GITHUB_API_BASE_URL" = "https://api.github.com"
+              test "$GITHUB_API_ALLOWED_HOSTS" = "api.github.com,github.example.test"
               test "$GITHUB_API_VERSION" = "2022-11-28"
               test "$GITHUB_API_USER_AGENT" = "ai-agent-coordinator-ci"
               test "$RUST_LOG" = "warn"
@@ -216,6 +218,7 @@ jobs:
             test "$LINEAR_MIN_ORG_INTERVAL_MS" = "100"
             test "$GITHUB_REPOSITORY_ADMIN_ENABLED" = "false"
             test "$GITHUB_API_BASE_URL" = "https://api.github.com"
+            test "$GITHUB_API_ALLOWED_HOSTS" = "api.github.com"
             test "$GITHUB_API_VERSION" = "2022-11-28"
             test "$GITHUB_API_USER_AGENT" = "ai-agent-coordinator"
             test "$RUST_LOG" = "ai_agent_coordinator=info,tower_http=info"

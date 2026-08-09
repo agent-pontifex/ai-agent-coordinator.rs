@@ -1,0 +1,99 @@
+name: DEN-877 multi-commit sealer hotfix
+
+on:
+  push:
+    branches:
+      - agent/den-877-final-reconciliation-v2
+    paths:
+      - '.github/workflows/den-877-multicommit-sealer-hotfix.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: den-877-multicommit-sealer-hotfix
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    if: github.repository == 'ORESoftware/ai-agent-coordinator.rs'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact writable replacement branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: agent/den-877-final-reconciliation-v2
+          fetch-depth: 0
+          persist-credentials: true
+          show-progress: false
+
+      - name: Preserve the final generated tree while replacing source history
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('scripts/reconstruct_hypesiege_streempilot_fleet.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''def amend_root_commit(repository: pathlib.Path) -> str:
+              if run(["git", "rev-list", "--count", "HEAD"], cwd=repository).strip() != "1":
+                  raise ReconstructionError(f"{repository} must contain exactly one source commit")
+              run(
+                  ["git", "commit", "--amend", "--no-edit", "--reset-author"],
+                  cwd=repository,
+                  env=git_environment(),
+              )
+              return run(["git", "rev-parse", "HEAD"], cwd=repository).strip()
+          '''
+          old = '\n'.join(line[10:] if line.startswith('          ') else line for line in old.splitlines()) + '\n'
+          new = '''def amend_root_commit(repository: pathlib.Path) -> str:
+              count_text = run(["git", "rev-list", "--count", "HEAD"], cwd=repository).strip()
+              if not count_text.isdigit() or int(count_text) < 1:
+                  raise ReconstructionError(f"{repository} has no source history to seal")
+              message = run(["git", "log", "-1", "--format=%B", "HEAD"], cwd=repository)
+              tree = run(["git", "write-tree"], cwd=repository).strip()
+              completed = subprocess.run(
+                  ["git", "commit-tree", tree],
+                  cwd=repository,
+                  env=git_environment(),
+                  check=False,
+                  text=True,
+                  input=message,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+              )
+              if completed.returncode != 0:
+                  detail = (completed.stderr or completed.stdout).strip()[:4096]
+                  raise ReconstructionError(f"git commit-tree failed: {detail}")
+              commit = completed.stdout.strip()
+              if not commit:
+                  raise ReconstructionError(f"{repository} produced an empty sealed commit id")
+              run(["git", "reset", "--hard", commit], cwd=repository)
+              return commit
+          '''
+          new = '\n'.join(line[10:] if line.startswith('          ') else line for line in new.splitlines()) + '\n'
+          if text.count(old) != 1:
+              raise SystemExit('expected exactly one single-source-commit sealing block')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+          python3 -m py_compile scripts/reconstruct_hypesiege_streempilot_fleet.py
+          git diff --check
+
+      - name: Remove temporary carriers and commit the semantic prerequisite
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f \
+            .github/workflows/den-877-final-reconciliation-v2.yml \
+            .github/workflows/den-877-multicommit-sealer-hotfix.yml
+          test ! -e .github/workflows/den-877-final-reconciliation-v2.yml
+          test ! -e .github/workflows/den-877-multicommit-sealer-hotfix.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'fix(DEN-877): deterministically seal generated trees'
+          git push origin HEAD:agent/den-877-final-reconciliation-v2

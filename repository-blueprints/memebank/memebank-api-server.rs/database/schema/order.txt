@@ -6,3 +6,4 @@
 050_jobs_and_lifecycle.sql
 060_functions_and_indexes.sql
 070_rls_and_grants.sql
+075_policy_bootstrap.sql

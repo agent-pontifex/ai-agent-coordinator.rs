@@ -51,16 +51,16 @@ class OrgRepositoryRelationshipTest(unittest.TestCase):
         self.assertEqual(
             report["summary"],
             {
-                "eligible_organizations": 29,
+                "eligible_organizations": 30,
                 "existing_public": 3,
-                "missing": 26,
+                "missing": 27,
                 "visibility_mismatch": 0,
                 "unsupported_account_type": 1,
                 "excluded_unmapped": 7,
                 "complete": False,
             },
         )
-        self.assertEqual(report["registry"]["mapped_owners"], 30)
+        self.assertEqual(report["registry"]["mapped_owners"], 31)
         self.assertFalse(
             report["bootstrap_contract"]["live_creation_authorized_by_this_artifact"]
         )
@@ -151,7 +151,7 @@ class OrgRepositoryRelationshipTest(unittest.TestCase):
             self.registry, "ORESoftware", IMMUTABLE_TEST_REF
         )
         overrides = manifest["repository_selection"]["linear_project_overrides"]
-        self.assertEqual(len(overrides), 6)
+        self.assertEqual(len(overrides), 5)
         self.assertEqual(
             {override["repository"] for override in overrides},
             {
@@ -160,7 +160,6 @@ class OrgRepositoryRelationshipTest(unittest.TestCase):
                 "ORESoftware/k8s-cluster",
                 "ORESoftware/mcp-rust-libs",
                 "ORESoftware/mip-solver-node.rs",
-                "ORESoftware/push-notification-server.rs",
             },
         )
         self.assertIsNone(manifest["repository_selection"]["default_repository"])
@@ -175,8 +174,8 @@ class OrgRepositoryRelationshipTest(unittest.TestCase):
         )
         self.assertEqual(first, second)
         index = json.loads(first["repository-relationships-index.json"])
-        self.assertEqual(index["owner_count"], 30)
-        self.assertEqual(len(index["files"]), 30)
+        self.assertEqual(index["owner_count"], 31)
+        self.assertEqual(len(index["files"]), 31)
         for path, digest in index["files"].items():
             self.assertEqual(
                 digest, hashlib.sha256(first[path].encode("utf-8")).hexdigest()

@@ -1,0 +1,278 @@
+name: Finalize DEN-877 semantic fleet merge
+
+on:
+  push:
+    branches:
+      - agent/den-877-fleet-merge-repair
+    paths:
+      - .github/workflows/finalize-den-877-semantic-merge.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: finalize-den-877-semantic-merge
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    if: >-
+      github.repository == 'ORESoftware/ai-agent-coordinator.rs' &&
+      github.ref == 'refs/heads/agent/den-877-fleet-merge-repair'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out the exact reconciliation branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: agent/den-877-fleet-merge-repair
+          fetch-depth: 0
+          persist-credentials: true
+          show-progress: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Apply the independently validated semantic patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_parent='4f958d51e25633e081cbb9802299e2b256f08733'
+          actual_parent="$(git rev-parse HEAD^)"
+          if [[ "$actual_parent" != "$expected_parent" ]]; then
+            echo "branch moved before finalization: $actual_parent != $expected_parent" >&2
+            exit 1
+          fi
+
+          patch_archive="$RUNNER_TEMP/den877-final.patch.gz"
+          patch_file="$RUNNER_TEMP/den877-final.patch"
+          base64 --decode > "$patch_archive" <<'DEN877_PATCH'
+          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
+          yTBzAAA=
+          DEN877_PATCH
+          printf '%s  %s\n' \
+            'ddbd8d24e70f2cb41dc4288020c1037483b909bb0d84393def788a69eb7d0533' \
+            "$patch_archive" | sha256sum --check --strict -
+          gzip --decompress --stdout "$patch_archive" > "$patch_file"
+          git apply --check "$patch_file"
+          git apply "$patch_file"
+          rm -f .github/workflows/finalize-den-877-semantic-merge.yml
+
+      - name: Prove the reconciled fleet contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile \
+            scripts/reconstruct_hypesiege_streempilot_fleet.py \
+            scripts/publish_hypesiege_streempilot_fleet.py \
+            scripts/test_publish_hypesiege_streempilot_fleet.py
+          python -m unittest -v scripts/test_publish_hypesiege_streempilot_fleet.py
+
+          python scripts/publish_hypesiege_streempilot_fleet.py \
+            --repository hypesiege/hypesiege-api-server.rs \
+            > "$RUNNER_TEMP/hypesiege-plan.json"
+          python scripts/publish_hypesiege_streempilot_fleet.py \
+            --repository streempilot/streempilot-monorepo \
+            > "$RUNNER_TEMP/streempilot-plan.json"
+
+          stale_digest='50629a57beca1ac85928cfae8fbebbca4f62a6455a7013016f92b1203dcbbd1''f'
+          if grep -RInF "$stale_digest" \
+            docs/hypesiege-streempilot-repository-publication.md \
+            repository-fleets/hypesiege-streempilot.json \
+            scripts/reconstruct_hypesiege_streempilot_fleet.py \
+            scripts/publish_hypesiege_streempilot_fleet.py; then
+            echo 'stale generator identity remains' >&2
+            exit 1
+          fi
+          if grep -RInE \
+            '9fb1ba2a57a7509be162ec1ca4eeb794ec910bbb|0e83a0dfa1c2f5c4a20c50c8b6f7d1453a24cc07' \
+            .github/workflows/repository-fleets.yml \
+            repository-fleets/hypesiege-streempilot.json \
+            scripts/test_publish_hypesiege_streempilot_fleet.py; then
+            echo 'stale monorepo identity remains' >&2
+            exit 1
+          fi
+          if git grep -nE '^(<<<<<<<|=======|>>>>>>>)' -- \
+            .github/workflows/repository-fleets.yml \
+            docs/hypesiege-streempilot-repository-publication.md \
+            repository-fleets/hypesiege-streempilot.json \
+            scripts/reconstruct_hypesiege_streempilot_fleet.py \
+            scripts/publish_hypesiege_streempilot_fleet.py \
+            scripts/test_publish_hypesiege_streempilot_fleet.py; then
+            echo 'conflict markers remain' >&2
+            exit 1
+          fi
+          test ! -e deploy/k8s/bootstrap
+          test ! -e repository-fleets/hypesiege-streempilot/RECONCILE-TRIGGER-20260731
+          test ! -e .github/workflows/hypesiege-streempilot-device-publish-temporary.yml
+          test ! -e .github/workflows/finalize-den-877-semantic-merge.yml
+          if find .github/workflows -maxdepth 1 -type f \
+            \( -name '*den-877*' -o -name 'hypesiege-streempilot-device-*' \) \
+            -print -quit | grep -q .; then
+            echo 'temporary fleet-repair workflow remains' >&2
+            exit 1
+          fi
+          git diff --check
+
+      - name: Commit the deep semantic merge
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -A
+          git diff --cached --check
+          test -n "$(git diff --cached --name-only)"
+          git config user.name 'ORESoftware'
+          git config user.email '11139560+ORESoftware@users.noreply.github.com'
+          git commit -m 'fix(DEN-877): preserve deterministic two-stage fleet histories'
+          git push origin HEAD:agent/den-877-fleet-merge-repair

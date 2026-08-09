@@ -1,0 +1,54 @@
+name: Database contract
+
+on:
+  pull_request:
+    paths:
+      - database/**
+      - .github/workflows/database-contract.yml
+  push:
+    branches: [main]
+    paths:
+      - database/**
+      - .github/workflows/database-contract.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: database
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Validate hierarchical agents.md
+        uses: ORESoftware/ai-agent-coordinator.rs/.github/actions/validate-agents-md@06f0bdb632ef129cce3f64d4fc98e16261532892
+        with:
+          repo-root: ${{ github.workspace }}
+          start-dir: ${{ github.workspace }}/database
+      - name: Validate workflow syntax
+        uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+        with:
+          args: .github/workflows/database-contract.yml
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Run desired-state contract gate
+        run: make agent-check
+      - uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4
+        with:
+          name: memebank-database-contract
+          path: |
+            database/.artifacts/memebank-schema.sql
+            database/.artifacts/schema-report.json
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,103 @@
+name: DEN-1610 patch materializer
+
+on:
+  push:
+    branches:
+      - agent/den-1610-authenticated-adapters-v2
+    paths:
+      - '.github/den-1610-patch/**'
+      - '.github/workflows/den-1610-patch-materializer.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: den-1610-patch-materializer
+  cancel-in-progress: false
+
+jobs:
+  materialize:
+    if: github.ref_name == 'agent/den-1610-authenticated-adapters-v2'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          ref: ${{ github.sha }}
+
+      - name: Verify and materialize reviewed source bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sha256sum --check <<'PARTS'
+          70234a1cd04ab3d71f3790cd343e5e8ab3ab6de2b32a861af5b19bfc51060e28  .github/den-1610-patch/part-00
+          a6dd98e23aa3e48dfa40d439bcc5b1ea3602e2bf523e5b59a80f0d293c05046c  .github/den-1610-patch/part-01
+          69d258bcf9481b8998d60f18d603deffeaef74cb8366d0c819ab55bccbe12bd1  .github/den-1610-patch/part-02
+          d3759476a93c958f4a21edf6a7bcfaedb94952835c317658de4633da4d75de58  .github/den-1610-patch/part-03
+          139d2115de9dd04353a6d2082dca8f5d92d5227d65a91b361c5b9041f4d2cbfe  .github/den-1610-patch/part-04
+          ea2b073d16b93203975ead4e609983d62a4cacdc014379f4aa80a8af99b4ca94  .github/den-1610-patch/part-05
+          d4b8fd8e91f9a2838cdb26419072fa70ae59a3480092bf7dca2e0eff76926791  .github/den-1610-patch/part-06
+          PARTS
+
+          cat .github/den-1610-patch/part-* > /tmp/den-1610-patch.b64
+          base64 --decode /tmp/den-1610-patch.b64 > /tmp/den-1610-patch.tar.gz
+          echo 'ee72cc9919ec7b5efbdbdecfa1c3b7ddb40db3dcc3f9bbb0f446260e122e916b  /tmp/den-1610-patch.tar.gz' | sha256sum --check -
+
+          python - <<'PY'
+          from pathlib import Path
+          import tarfile
+
+          root = Path.cwd().resolve()
+          allowed = {
+              'src/prompt_reconciliation_adapters.rs',
+              'src/bin/prompt-reconciliation-apply.rs',
+              'src/prompt_reconciliation/model.rs',
+              'src/lib.rs',
+              'docs/prompt-reconciliation-adapters.md',
+              'docs/prompt-reconciliation-apply-guard.md',
+          }
+
+          with tarfile.open('/tmp/den-1610-patch.tar.gz', 'r:gz') as archive:
+              members = archive.getmembers()
+              names = [member.name for member in members]
+              if len(members) != len(allowed) or set(names) != allowed:
+                  raise SystemExit(f'unexpected patch members: {names!r}')
+              for member in members:
+                  if not member.isfile():
+                      raise SystemExit(f'non-regular patch member: {member.name}')
+                  target = (root / member.name).resolve()
+                  if root != target and root not in target.parents:
+                      raise SystemExit(f'patch path escapes repository: {member.name}')
+                  source = archive.extractfile(member)
+                  if source is None:
+                      raise SystemExit(f'could not read patch member: {member.name}')
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  target.write_bytes(source.read())
+          PY
+
+          sha256sum --check <<'SOURCES'
+          bd534651a15a650012a06f5d33776da8f4e1faa8588103191cb4b29982f21d87  src/prompt_reconciliation_adapters.rs
+          1317f9ee404312d9b007531efbc794c7c8d27270c3e1bbdfc92c262bcee7b217  src/bin/prompt-reconciliation-apply.rs
+          a62df7e64bb4e63d1b4b4c20b8044654c69ee21e7714072adcb9b686561f166d  src/prompt_reconciliation/model.rs
+          35003ee088ecedfebfcf825bffbd288d2d2a0df073808c62eb8d1a0b96fd8306  src/lib.rs
+          f420ddf3a71f5562acc7fc46d970e39f82556442fa15398374218945226dbeaa  docs/prompt-reconciliation-adapters.md
+          ce7d84defd8bfe868d412aee2193e9f0435054df4b0d4c084456f50cf5e486e3  docs/prompt-reconciliation-apply-guard.md
+          SOURCES
+
+          rm -rf .github/den-1610-patch
+          rm -f .github/workflows/den-1610-patch-materializer.yml
+          git diff --check
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'No materialization changes to commit.'
+            exit 0
+          fi
+          git commit -m 'feat(DEN-1610): add authenticated reconciliation adapters'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
