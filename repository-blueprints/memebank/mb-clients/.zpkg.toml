@@ -29,6 +29,4 @@ outputs = [
 adapter = "none"
 
 [scripts]
-generate = "python3 scripts/generate_clients.py"
-test = "make agent-check"
-validate = "python3 scripts/validate_clients.py"
+test = "python3 scripts/generate_clients.py && make agent-check && python3 scripts/validate_clients.py"

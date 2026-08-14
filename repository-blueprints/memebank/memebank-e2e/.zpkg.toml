@@ -34,5 +34,4 @@ outputs = [
 adapter = "none"
 
 [scripts]
-test = "make agent-check"
-benchmark = "make report"
+test = "make agent-check && make report"
