@@ -1,0 +1,15 @@
+{
+  "schema_version": "1.0",
+  "event_id": "00000000-0000-4000-8000-000000000000",
+  "occurred_at": "2026-01-01T00:00:00Z",
+  "source": "x",
+  "correlation": "x",
+  "kind": "x",
+  "payload_classification": "x",
+  "redaction_state": "x",
+  "evidence_references": [
+    "x"
+  ],
+  "delivery": "x",
+  "payload": {}
+}

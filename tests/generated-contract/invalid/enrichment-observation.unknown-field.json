@@ -1,0 +1,11 @@
+{
+  "observation_id": "x",
+  "asset_id": "x",
+  "variant_id": "x",
+  "kind": "ocr_span",
+  "status": "generated",
+  "provenance": "x",
+  "payload": "x",
+  "created_at": "x",
+  "__unexpected_field__": "drift"
+}

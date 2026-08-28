@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.0",
+  "manifest_id": "x",
+  "asset_id": "x",
+  "exact_digest": "x",
+  "media_type": "x",
+  "dimensions": "x",
+  "variant": {
+    "variant_id": "x",
+    "kind": "original",
+    "recipe": "x"
+  },
+  "created_at": "x"
+}
