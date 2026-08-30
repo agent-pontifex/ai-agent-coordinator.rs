@@ -1,9 +1,0 @@
-{
-  "observation_id": "x",
-  "asset_id": "x",
-  "variant_id": "x",
-  "kind": "ocr_span",
-  "provenance": "x",
-  "payload": "x",
-  "created_at": "x"
-}
