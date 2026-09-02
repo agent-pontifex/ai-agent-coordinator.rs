@@ -1,0 +1,97 @@
+name: One-shot DEN-4134 reconciliation Rust repair
+
+on:
+  push:
+    branches:
+      - rescue/DEN-4134-fleet-20260829/freeze/generated-readonly-policy-ce47f512842a
+
+permissions:
+  contents: write
+
+jobs:
+  repair-and-verify:
+    if: "${{ github.event.head_commit.message != 'fix(DEN-4134): compile and format reconciliation policy targets' }}"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out the exact rescue branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install the repository Rust toolchain with rustfmt
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.97.0
+          components: rustfmt
+
+      - name: Apply, format, and verify the bounded repair
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          fenced = Path("src/bin/prompt-reconciliation-fenced-receipts.rs")
+          text = fenced.read_text(encoding="utf-8")
+          old = "    pub fn canonical_issue(&self, issue_id: &str) -> &str {\n"
+          new = "    pub fn canonical_issue<'a>(&'a self, issue_id: &'a str) -> &'a str {\n"
+          if text.count(old) != 1:
+              raise SystemExit("expected exactly one canonical_issue signature to repair")
+          fenced.write_text(text.replace(old, new), encoding="utf-8")
+
+          adapter = Path("src/bin/prompt-reconciliation-adapter-policy.rs")
+          text = adapter.read_text(encoding="utf-8")
+          old_import = "    io::{self, Read},\n"
+          if text.count(old_import) != 1:
+              raise SystemExit("expected exactly one mixed production/test io import")
+          text = text.replace(old_import, "    io::Read,\n")
+          test_import = "mod tests {\n    use super::*;\n"
+          if text.count(test_import) != 1:
+              raise SystemExit("expected exactly one adapter test module import block")
+          text = text.replace(test_import, test_import + "    use std::io;\n")
+          adapter.write_text(text, encoding="utf-8")
+          PY
+
+          cargo fmt --all
+          cargo fmt --all --check
+          cargo check --locked --all-targets --all-features
+          cargo test --locked \
+            --bin prompt-reconciliation-fenced-receipts \
+            --bin prompt-reconciliation-adapter-policy
+
+          python3 <<'PY'
+          import subprocess
+
+          expected = {
+              "src/bin/prompt-reconciliation-adapter-policy.rs",
+              "src/bin/prompt-reconciliation-fenced-receipts.rs",
+          }
+          output = subprocess.check_output(
+              ["git", "status", "--porcelain=v1", "-z"]
+          ).decode("utf-8")
+          entries = [entry for entry in output.split("\0") if entry]
+          paths = {entry[3:] for entry in entries}
+          if paths != expected:
+              raise SystemExit(
+                  f"bounded Rust repair changed unexpected paths: {sorted(paths)}"
+              )
+          PY
+
+          git add -- \
+            src/bin/prompt-reconciliation-adapter-policy.rs \
+            src/bin/prompt-reconciliation-fenced-receipts.rs
+          git diff --cached --check
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix(DEN-4134): compile and format reconciliation policy targets"
+
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic ${auth}" \
+            push origin "HEAD:${GITHUB_REF_NAME}"
