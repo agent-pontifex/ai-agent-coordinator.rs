@@ -36,11 +36,12 @@ class OciWorkflowTests(unittest.TestCase):
         permissions = publish.split("\n    steps:\n", 1)[0]
         self.assertIn("packages: write", permissions)
 
-    def test_publish_retains_sbom_provenance_and_immutable_tag(self) -> None:
+    def test_publish_retains_sbom_provenance_and_expected_tags(self) -> None:
         publish = self.text.split("\n  publish:\n", 1)[1]
         self.assertIn("--provenance=mode=max", publish)
         self.assertIn("--sbom=true", publish)
         self.assertIn('--tag "${IMAGE_NAME}:sha-${GITHUB_SHA}"', publish)
+        self.assertIn('--tag "${IMAGE_NAME}:main"', publish)
 
     def test_oracle_retriggers_and_runs_in_verify_job(self) -> None:
         self.assertIn("- 'scripts/test-oci-workflow.py'", self.text)
