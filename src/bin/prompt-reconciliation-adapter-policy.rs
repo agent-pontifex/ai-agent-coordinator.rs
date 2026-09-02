@@ -1,10 +1,6 @@
 //! Fail-closed policy primitives for authenticated prompt reconciliation adapters.
 
-use std::{
-    collections::BTreeSet,
-    fmt,
-    io::{self, Read},
-};
+use std::{collections::BTreeSet, fmt, io::Read};
 
 const MAX_RETRY_AFTER_SECONDS: u64 = 300;
 const MAX_IDENTIFIER_BYTES: usize = 128;
@@ -74,7 +70,11 @@ pub struct RepositoryAllowlist {
 impl RepositoryAllowlist {
     pub fn parse(value: &str) -> Result<Self, PolicyError> {
         let mut repositories = BTreeSet::new();
-        for raw in value.split(',').map(str::trim).filter(|item| !item.is_empty()) {
+        for raw in value
+            .split(',')
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+        {
             let (owner, repository) = raw
                 .split_once('/')
                 .ok_or_else(|| PolicyError::new("allowlist entries must be owner/repository"))?;
@@ -96,7 +96,9 @@ impl RepositoryAllowlist {
     pub fn permits(&self, owner: &str, repository: &str) -> bool {
         validate_slug(owner).is_ok()
             && validate_slug(repository).is_ok()
-            && self.repositories.contains(&repository_key(owner, repository))
+            && self
+                .repositories
+                .contains(&repository_key(owner, repository))
     }
 }
 
@@ -126,11 +128,7 @@ pub fn validate_endpoint(
     {
         return Ok(());
     }
-    if scheme == "http"
-        && allow_loopback_http
-        && is_loopback_host(host)
-        && port.is_some()
-    {
+    if scheme == "http" && allow_loopback_http && is_loopback_host(host) && port.is_some() {
         return Ok(());
     }
     Err(PolicyError::new(
@@ -169,9 +167,9 @@ pub fn parse_retry_after_seconds(value: &str) -> Option<u64> {
 }
 
 pub fn read_bounded(mut reader: impl Read, maximum_bytes: usize) -> Result<Vec<u8>, PolicyError> {
-    let probe_limit = maximum_bytes.checked_add(1).ok_or_else(|| {
-        PolicyError::new("response size bound cannot be represented safely")
-    })?;
+    let probe_limit = maximum_bytes
+        .checked_add(1)
+        .ok_or_else(|| PolicyError::new("response size bound cannot be represented safely"))?;
     let mut bytes = Vec::with_capacity(maximum_bytes.min(64 * 1024));
     let probe_limit = u64::try_from(probe_limit)
         .map_err(|_| PolicyError::new("response size bound exceeds platform limits"))?;
@@ -195,15 +193,17 @@ pub fn operation_marker(plan_digest: &str, operation_id: &str) -> Result<String,
         ));
     }
     validate_slug(operation_id)?;
-    Ok(format!("prompt-reconciliation:{plan_digest}:{operation_id}"))
+    Ok(format!(
+        "prompt-reconciliation:{plan_digest}:{operation_id}"
+    ))
 }
 
 fn validate_slug(value: &str) -> Result<(), PolicyError> {
     let valid = !value.is_empty()
         && value.len() <= MAX_IDENTIFIER_BYTES
-        && value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
-        });
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'));
     if valid {
         Ok(())
     } else {
@@ -272,6 +272,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io;
 
     #[test]
     fn secrets_are_redacted_by_debug() {
@@ -283,9 +284,8 @@ mod tests {
 
     #[test]
     fn allowlist_is_case_insensitive_and_exact() {
-        let allowlist = RepositoryAllowlist::parse(
-            "ORESoftware/ai-agent-coordinator.rs, sonus-auris/mobile",
-        );
+        let allowlist =
+            RepositoryAllowlist::parse("ORESoftware/ai-agent-coordinator.rs, sonus-auris/mobile");
         assert!(allowlist.is_ok());
         let Some(allowlist) = allowlist.ok() else {
             return;
@@ -298,9 +298,15 @@ mod tests {
     #[test]
     fn endpoints_are_pinned_and_redirect_targets_must_be_revalidated() {
         assert!(validate_endpoint("https://api.github.com", "api.github.com", false).is_ok());
-        assert!(validate_endpoint("https://api.github.com:443/repos", "api.github.com", false).is_ok());
-        assert!(validate_endpoint("https://api.github.com.evil.test", "api.github.com", false).is_err());
-        assert!(validate_endpoint("https://token@api.github.com", "api.github.com", false).is_err());
+        assert!(
+            validate_endpoint("https://api.github.com:443/repos", "api.github.com", false).is_ok()
+        );
+        assert!(
+            validate_endpoint("https://api.github.com.evil.test", "api.github.com", false).is_err()
+        );
+        assert!(
+            validate_endpoint("https://token@api.github.com", "api.github.com", false).is_err()
+        );
         assert!(validate_endpoint("http://api.github.com", "api.github.com", false).is_err());
         assert!(validate_endpoint("http://127.0.0.1:8080", "api.github.com", true).is_ok());
         assert!(validate_endpoint("http://localhost:8080", "api.github.com", false).is_err());
@@ -338,12 +344,18 @@ mod tests {
     fn retry_after_is_numeric_and_bounded() {
         assert_eq!(parse_retry_after_seconds("30"), Some(30));
         assert_eq!(parse_retry_after_seconds("301"), None);
-        assert_eq!(parse_retry_after_seconds("Wed, 21 Oct 2015 07:28:00 GMT"), None);
+        assert_eq!(
+            parse_retry_after_seconds("Wed, 21 Oct 2015 07:28:00 GMT"),
+            None
+        );
     }
 
     #[test]
     fn responses_are_bounded_before_parsing() {
-        assert_eq!(read_bounded(io::Cursor::new(b"hello"), 5).ok(), Some(b"hello".to_vec()));
+        assert_eq!(
+            read_bounded(io::Cursor::new(b"hello"), 5).ok(),
+            Some(b"hello".to_vec())
+        );
         assert!(read_bounded(io::Cursor::new(b"hello!"), 5).is_err());
     }
 
