@@ -1,0 +1,83 @@
+name: One-shot chacha20 lock refresh
+
+on:
+  push:
+    branches:
+      - fix/chacha20-0.10.2-lock
+
+permissions:
+  contents: write
+
+jobs:
+  refresh-lock:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out the exact repair branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Replace only the yanked chacha20 lock entry
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          cargo update -p chacha20 --precise 0.10.2
+
+          python3 <<'PY'
+          from collections import Counter
+          import subprocess
+
+          old_checksum = "d524456ba66e72eb8b115ff89e01e497f8e6d11d78b70b1aa13c0fbd97540a81"
+          new_checksum = "65c35e4b699c7e15ccbe7ee35c005e4fc0a278d22238a2857e6ce2dadeda1b06"
+          diff = subprocess.check_output(
+              ["git", "diff", "--unified=0", "--", "Cargo.lock"],
+              text=True,
+          )
+          changed = [
+              line
+              for line in diff.splitlines()
+              if line.startswith(("+", "-"))
+              and not line.startswith(("+++", "---"))
+          ]
+          expected = Counter(
+              [
+                  '-version = "0.10.1"',
+                  f'-checksum = "{old_checksum}"',
+                  '+version = "0.10.2"',
+                  f'+checksum = "{new_checksum}"',
+              ]
+          )
+          if Counter(changed) != expected:
+              raise SystemExit(
+                  "cargo update changed more than the reviewed chacha20 version/checksum pair"
+              )
+          PY
+
+          git rm -- .github/workflows/one-shot-chacha20-lock.yml
+
+          while IFS= read -r path; do
+            case "$path" in
+              Cargo.lock|.github/workflows/one-shot-chacha20-lock.yml) ;;
+              *)
+                printf 'unexpected changed path: %s\n' "$path" >&2
+                exit 1
+                ;;
+            esac
+          done < <(git status --porcelain=v1 | cut -c4-)
+
+          git add -- Cargo.lock
+          git diff --cached --check
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix: replace yanked chacha20 0.10.1 lock entry"
+
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic ${auth}" \
+            push origin "HEAD:${GITHUB_REF_NAME}"
