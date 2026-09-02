@@ -11,7 +11,7 @@ permissions:
 jobs:
   refresh-lock:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Check out the exact repair branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -20,21 +20,40 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Replace only the yanked chacha20 lock entry
+      - name: Replace and compile the exact chacha20 lock block
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
-          cargo update -p chacha20 --precise 0.10.2
-
           python3 <<'PY'
           from collections import Counter
+          from pathlib import Path
           import subprocess
 
+          path = Path("Cargo.lock")
+          text = path.read_text(encoding="utf-8")
           old_checksum = "d524456ba66e72eb8b115ff89e01e497f8e6d11d78b70b1aa13c0fbd97540a81"
           new_checksum = "65c35e4b699c7e15ccbe7ee35c005e4fc0a278d22238a2857e6ce2dadeda1b06"
+          old = f'''[[package]]
+          name = "chacha20"
+          version = "0.10.1"
+          source = "registry+https://github.com/rust-lang/crates.io-index"
+          checksum = "{old_checksum}"
+          dependencies = [
+           "cfg-if",
+           "cpufeatures 0.3.0",
+           "rand_core 0.10.1",
+          ]
+          '''
+          new = old.replace('version = "0.10.1"', 'version = "0.10.2"').replace(
+              old_checksum, new_checksum
+          )
+          if text.count(old) != 1:
+              raise SystemExit("expected exactly one reviewed chacha20 0.10.1 package block")
+          path.write_text(text.replace(old, new), encoding="utf-8")
+
           diff = subprocess.check_output(
               ["git", "diff", "--unified=0", "--", "Cargo.lock"],
               text=True,
@@ -54,10 +73,10 @@ jobs:
               ]
           )
           if Counter(changed) != expected:
-              raise SystemExit(
-                  "cargo update changed more than the reviewed chacha20 version/checksum pair"
-              )
+              raise SystemExit("lock repair changed more than the reviewed version/checksum pair")
           PY
+
+          cargo check --locked --all-targets --all-features
 
           git rm -- .github/workflows/one-shot-chacha20-lock.yml
 
