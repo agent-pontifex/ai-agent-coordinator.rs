@@ -16,20 +16,30 @@ concurrency:
 jobs:
   contract:
     name: Generated policy + runtime contract
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.11"
 
-      - name: Install jsonschema
-        run: python3 -m pip install --quiet jsonschema
+      - name: Install the pinned Draft 2020-12 validator
+        run: >-
+          python3 -m pip install --quiet --disable-pip-version-check
+          jsonschema==4.25.1
+
+      - name: Exercise checker self-tests
+        run: python3 scripts/check-generated-contract.py --self-test
 
       # Policy READMEs must match what git actually does, every generated file
-      # must be freezable, and JSON Schema must still accept the valid fixtures
-      # and reject the invalid ones.
+      # must be freezable, and every named valid/invalid fixture must map to and
+      # exercise exactly one JSON Schema.
       - name: Check generated policy and runtime contract
         run: python3 scripts/check-generated-contract.py --freeze --require-readonly
 
@@ -37,13 +47,21 @@ jobs:
       # actually enforces the policy: regenerate, and fail if the committed
       # output moved. Runs only where the repo declares how to regenerate.
       - name: Regenerate and diff
+        shell: bash
         run: |
+          set -euo pipefail
           if [ ! -f .generated-regen.sh ]; then
             echo "No .generated-regen.sh in this repo; skipping regenerate-and-diff."
             echo "Add one (a script that re-runs the generators) to enable it."
             exit 0
           fi
-          chmod -R u+w $(git ls-files -- '*generated/*' | xargs -r -n1 dirname | sort -u) 2>/dev/null || true
+          while IFS= read -r directory; do
+            chmod -R u+w -- "$directory"
+          done < <(
+            git ls-files -- '*generated/*' \
+              | while IFS= read -r path; do dirname -- "$path"; done \
+              | sort -u
+          )
           bash .generated-regen.sh
           if ! git diff --quiet --exit-code; then
             echo "::error::Committed generated output does not match a fresh run of the generator."

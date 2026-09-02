@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   apply-and-verify:
+    if: github.event.head_commit.message != 'test(DEN-4134): make generated schema fixtures executable'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -25,7 +26,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Reassemble, apply, and verify the bounded patch
+      - name: Reassemble, apply, and verify the non-workflow patch
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -82,49 +83,38 @@ jobs:
               )
           PY
 
-          git apply --check --whitespace=error-all "$patch_file"
-          git apply --whitespace=error-all "$patch_file"
+          git apply --check --whitespace=error-all \
+            --exclude=.github/workflows/generated-contract.yml "$patch_file"
+          git apply --whitespace=error-all \
+            --exclude=.github/workflows/generated-contract.yml "$patch_file"
 
           python3 -m pip install --quiet --disable-pip-version-check jsonschema==4.25.1
           python3 -m py_compile scripts/check-generated-contract.py
           python3 scripts/check-generated-contract.py --self-test
           python3 scripts/check-generated-contract.py --freeze --require-readonly
 
-          git rm -- .github/den4134-patch/{00,01,02,03,04,05,06,07,08,09,10,11} \
-            .github/workflows/one-shot-den4134-generated-contract.yml
-
           python3 <<'PY'
           import subprocess
 
-          allowed_exact = {
-              ".github/workflows/one-shot-den4134-generated-contract.yml",
-              ".github/workflows/generated-contract.yml",
-              "scripts/check-generated-contract.py",
-          }
           output = subprocess.check_output(
               ["git", "status", "--porcelain=v1", "-z"],
           ).decode("utf-8")
           entries = [entry for entry in output.split("\0") if entry]
-          paths = []
-          for entry in entries:
-              path = entry[3:]
-              paths.append(path)
-              if (
-                  path in allowed_exact
-                  or path.startswith(".github/den4134-patch/")
-                  or path.startswith("tests/generated-contract/")
+          paths = [entry[3:] for entry in entries]
+          for path in paths:
+              if path == "scripts/check-generated-contract.py" or path.startswith(
+                  "tests/generated-contract/"
               ):
                   continue
               raise SystemExit(f"unexpected changed path: {path}")
-          required = allowed_exact | {
-              f".github/den4134-patch/{index:02d}" for index in range(12)
-          }
-          missing = sorted(required - set(paths))
-          if missing:
-              raise SystemExit(f"expected changed paths missing: {missing}")
+          if len(paths) != 44 or len(set(paths)) != 44:
+              raise SystemExit(
+                  f"expected 44 unique non-workflow changes, got {len(paths)} lines / "
+                  f"{len(set(paths))} unique"
+              )
           PY
 
-          git add -- .github/workflows/generated-contract.yml scripts/check-generated-contract.py tests/generated-contract
+          git add -- scripts/check-generated-contract.py tests/generated-contract
           git diff --cached --check
 
           git config user.name "github-actions[bot]"
