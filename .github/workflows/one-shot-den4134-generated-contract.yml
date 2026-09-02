@@ -25,20 +25,32 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Apply and verify the bounded patch
+      - name: Reassemble, apply, and verify the bounded patch
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
-          payload=.github/den4134-generated-contract.patch.gz.b64
+          encoded=/tmp/den4134-generated-contract.patch.gz.b64
           archive=/tmp/den4134-generated-contract.patch.gz
           patch_file=/tmp/den4134-generated-contract.patch
 
-          echo "52dc884bd33dc2e9bc53a5aa09700132efb571b93ef63abe6fc53265a05f4d0d  $payload" \
+          mapfile -t chunks < <(find .github/den4134-patch -maxdepth 1 -type f -printf '%f\n' | sort)
+          if [ "${#chunks[@]}" -ne 12 ]; then
+            printf 'expected 12 patch chunks, found %s\n' "${#chunks[@]}" >&2
+            exit 1
+          fi
+          for index in $(seq -w 0 11); do
+            if [ "${chunks[$((10#$index))]}" != "$index" ]; then
+              printf 'missing or unordered patch chunk %s\n' "$index" >&2
+              exit 1
+            fi
+          done
+          cat .github/den4134-patch/{00,01,02,03,04,05,06,07,08,09,10,11} > "$encoded"
+          echo "52dc884bd33dc2e9bc53a5aa09700132efb571b93ef63abe6fc53265a05f4d0d  $encoded" \
             | sha256sum --check --strict
-          base64 --decode "$payload" > "$archive"
+          base64 --decode "$encoded" > "$archive"
           echo "0633916cbf5023663c546e99d08645e2a38a1e9eb9fe37466a17804a85bd87f4  $archive" \
             | sha256sum --check --strict
           gzip -dc "$archive" > "$patch_file"
@@ -78,13 +90,13 @@ jobs:
           python3 scripts/check-generated-contract.py --self-test
           python3 scripts/check-generated-contract.py --freeze --require-readonly
 
-          git rm -- "$payload" .github/workflows/one-shot-den4134-generated-contract.yml
+          git rm -- .github/den4134-patch/{00,01,02,03,04,05,06,07,08,09,10,11} \
+            .github/workflows/one-shot-den4134-generated-contract.yml
 
           python3 <<'PY'
           import subprocess
 
           allowed_exact = {
-              ".github/den4134-generated-contract.patch.gz.b64",
               ".github/workflows/one-shot-den4134-generated-contract.yml",
               ".github/workflows/generated-contract.yml",
               "scripts/check-generated-contract.py",
@@ -97,16 +109,17 @@ jobs:
           for entry in entries:
               path = entry[3:]
               paths.append(path)
-              if path in allowed_exact or path.startswith("tests/generated-contract/"):
+              if (
+                  path in allowed_exact
+                  or path.startswith(".github/den4134-patch/")
+                  or path.startswith("tests/generated-contract/")
+              ):
                   continue
               raise SystemExit(f"unexpected changed path: {path}")
-          expected = {
-              ".github/den4134-generated-contract.patch.gz.b64",
-              ".github/workflows/one-shot-den4134-generated-contract.yml",
-              ".github/workflows/generated-contract.yml",
-              "scripts/check-generated-contract.py",
+          required = allowed_exact | {
+              f".github/den4134-patch/{index:02d}" for index in range(12)
           }
-          missing = sorted(expected - set(paths))
+          missing = sorted(required - set(paths))
           if missing:
               raise SystemExit(f"expected changed paths missing: {missing}")
           PY
