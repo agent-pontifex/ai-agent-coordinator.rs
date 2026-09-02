@@ -207,19 +207,28 @@ def freeze_tree(generated_dir: Path) -> int:
 
 
 def discover_schemas(root: Path) -> list[Path]:
+    root = root.resolve()
     schemas: list[Path] = []
+
+    def consider(path: Path, *, schema_directory: bool = False) -> None:
+        if not path.is_file():
+            return
+        relative = path.resolve().relative_to(root)
+        if any(part in SKIP_DIR_NAMES for part in relative.parts):
+            return
+        name = path.name.lower()
+        if name.endswith(".schema.json") or "schema" in name:
+            schemas.append(path)
+        elif schema_directory and name.endswith(".json"):
+            schemas.append(path)
+
+    for path in root.rglob("*.schema.json"):
+        consider(path)
     for directory in walk_dirs(root):
         if directory.name in SCHEMA_DIR_NAMES or directory.name == "generated":
             for path in directory.rglob("*.json"):
-                if not path.is_file():
-                    continue
-                if any(part in SKIP_DIR_NAMES for part in path.parts):
-                    continue
-                name = path.name.lower()
-                if name.endswith(".schema.json") or "schema" in name:
-                    schemas.append(path)
-                elif directory.name in SCHEMA_DIR_NAMES and name.endswith(".json"):
-                    schemas.append(path)
+                consider(path, schema_directory=directory.name in SCHEMA_DIR_NAMES)
+
     unique: list[Path] = []
     seen: set[Path] = set()
     for path in schemas:
@@ -246,14 +255,48 @@ def looks_like_schema(doc: Any) -> bool:
     return doc.get("type") in {"object", "array", "string", "number", "integer", "boolean"}
 
 
-def jsonschema_validate(instance: Any, schema: dict[str, Any]) -> list[str]:
+def jsonschema_available() -> bool:
+    try:
+        import jsonschema  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def build_schema_registry(
+    schema_docs: list[tuple[Path, dict[str, Any]]],
+) -> Any | None:
+    try:
+        from referencing import Registry, Resource
+    except ImportError:
+        return None
+    registry = Registry()
+    for path, schema in schema_docs:
+        resource = Resource.from_contents(schema)
+        schema_id = schema.get("$id")
+        if isinstance(schema_id, str) and schema_id:
+            registry = registry.with_resource(schema_id, resource)
+        registry = registry.with_resource(path.resolve().as_uri(), resource)
+    return registry
+
+
+def jsonschema_validate(
+    instance: Any,
+    schema: dict[str, Any],
+    *,
+    registry: Any | None = None,
+) -> list[str]:
     try:
         import jsonschema
     except ImportError:
         return structural_validate(instance, schema)
     validator_cls = getattr(jsonschema, "Draft202012Validator", jsonschema.Draft7Validator)
     try:
-        validator = validator_cls(schema)
+        validator_cls.check_schema(schema)
+        kwargs: dict[str, Any] = {"format_checker": jsonschema.FormatChecker()}
+        if registry is not None:
+            kwargs["registry"] = registry
+        validator = validator_cls(schema, **kwargs)
         return [
             f"{list(error.absolute_path)}: {error.message}"
             for error in validator.iter_errors(instance)
@@ -556,22 +599,124 @@ def check_generated_dir(
     return policy
 
 
-def check_schema_runtime(root: Path, findings: Findings) -> None:
-    schemas = [path for path in discover_schemas(root) if looks_like_schema(load_json(path))]
-    if not schemas:
-        findings.note("no JSON Schema documents found to runtime-check")
+def schema_fixture_key(path: Path) -> str:
+    name = path.name
+    if name.endswith(".schema.json"):
+        return name[: -len(".schema.json")]
+    return path.stem
+
+
+def fixture_schema_key(path: Path) -> str:
+    return path.name.split(".", 1)[0]
+
+
+def assert_invalid_fixture_is_isolated(
+    fixture: Path,
+    instance: Any,
+    baseline: Any,
+    findings: Findings,
+    root: Path,
+) -> None:
+    if not isinstance(instance, dict) or not isinstance(baseline, dict):
         return
+    suffix = fixture.name[len(fixture_schema_key(fixture)) + 1 : -len(".json")]
+    expected = json.loads(json.dumps(baseline))
+    if suffix.startswith("missing-required-"):
+        field = suffix[len("missing-required-") :]
+        if field not in expected:
+            findings.error(
+                f"{fixture.relative_to(root)} names unknown baseline field {field!r}"
+            )
+            return
+        expected.pop(field)
+        if instance != expected:
+            findings.error(
+                f"{fixture.relative_to(root)} must differ from its valid fixture only "
+                f"by removing required field {field!r}"
+            )
+    elif suffix == "unknown-field":
+        if "__unexpected_field__" not in instance:
+            findings.error(
+                f"{fixture.relative_to(root)} must add __unexpected_field__"
+            )
+            return
+        candidate = dict(instance)
+        candidate.pop("__unexpected_field__")
+        if candidate != expected:
+            findings.error(
+                f"{fixture.relative_to(root)} must differ from its valid fixture only "
+                "by adding __unexpected_field__"
+            )
+    elif suffix.startswith("wrong-type-") or suffix.startswith("empty-"):
+        prefix = "wrong-type-" if suffix.startswith("wrong-type-") else "empty-"
+        field = suffix[len(prefix) :]
+        if field not in expected or field not in instance:
+            findings.error(
+                f"{fixture.relative_to(root)} names unknown baseline field {field!r}"
+            )
+            return
+        candidate = dict(instance)
+        candidate[field] = expected[field]
+        if candidate != expected:
+            findings.error(
+                f"{fixture.relative_to(root)} must differ from its valid fixture only "
+                f"at field {field!r}"
+            )
+
+
+def check_schema_runtime(root: Path, findings: Findings) -> None:
+    schema_docs: list[tuple[Path, dict[str, Any]]] = []
+    for path in discover_schemas(root):
+        doc = load_json(path)
+        if isinstance(doc, dict) and looks_like_schema(doc):
+            schema_docs.append((path, doc))
+
+    contract_root = root / "tests" / "generated-contract"
+    valid_fixtures = json_files(contract_root / "valid")
+    invalid_fixtures = json_files(contract_root / "invalid")
+    all_fixtures = valid_fixtures + invalid_fixtures
+
+    if not schema_docs:
+        if all_fixtures:
+            findings.error(
+                "generated-contract fixtures exist but no JSON Schema documents were discovered"
+            )
+        else:
+            findings.note("no JSON Schema documents found to runtime-check")
+        return
+    if all_fixtures and not jsonschema_available():
+        findings.error(
+            "the jsonschema package is required when generated-contract fixtures exist; "
+            "the structural fallback cannot prove Draft 2020-12 references and formats"
+        )
+        return
+
+    try:
+        registry = build_schema_registry(schema_docs)
+    except Exception as exc:  # noqa: BLE001 — fail closed on registry construction
+        findings.error(f"failed to construct JSON Schema registry: {exc}")
+        return
+
+    schemas_by_key: dict[str, list[tuple[Path, dict[str, Any]]]] = {}
+    for schema_path, doc in schema_docs:
+        schemas_by_key.setdefault(schema_fixture_key(schema_path), []).append(
+            (schema_path, doc)
+        )
+
     validated = 0
-    for schema_path in schemas:
-        doc = load_json(schema_path)
-        if not isinstance(doc, dict):
-            continue
+    for schema_path, doc in schema_docs:
         rel = schema_path.relative_to(root)
+        schema_errors = jsonschema_validate({}, doc, registry=registry)
+        if schema_errors and schema_errors[0].startswith("schema rejected by validator:"):
+            findings.error(f"{rel}: {schema_errors[0]}")
+            continue
         for example in schema_examples(doc):
-            errors = jsonschema_validate(example, doc)
+            errors = jsonschema_validate(example, doc, registry=registry)
             validated += 1
             if errors:
-                findings.error(f"{rel}: embedded example failed runtime schema check: {errors[0]}")
+                findings.error(
+                    f"{rel}: embedded example failed runtime schema check: {errors[0]}"
+                )
         sibling_examples = schema_path.parent / "examples"
         if sibling_examples.is_dir():
             for fixture in json_files(sibling_examples):
@@ -579,52 +724,82 @@ def check_schema_runtime(root: Path, findings: Findings) -> None:
                 if instance is None:
                     findings.error(f"{fixture.relative_to(root)}: invalid JSON fixture")
                     continue
-                errors = jsonschema_validate(instance, doc)
+                errors = jsonschema_validate(instance, doc, registry=registry)
                 validated += 1
                 if errors:
                     findings.error(
                         f"{fixture.relative_to(root)}: failed {rel}: {errors[0]}"
                     )
-    contract_root = root / "tests" / "generated-contract"
-    schema_for_fixtures = None
-    for candidate in (
-        root / "generated" / "json-schema",
-        root / "json-schema",
-        root / "schema",
-        root / "schemas",
-    ):
-        if candidate.is_dir():
-            for path in sorted(candidate.rglob("*.json")):
-                doc = load_json(path)
-                if looks_like_schema(doc):
-                    schema_for_fixtures = (path, doc)
-                    break
-        if schema_for_fixtures:
-            break
-    if schema_for_fixtures and contract_root.is_dir():
-        schema_path, schema_doc = schema_for_fixtures
-        for fixture in json_files(contract_root / "valid"):
-            instance = load_json(fixture)
-            validated += 1
-            if instance is None:
-                findings.error(f"{fixture.relative_to(root)}: invalid JSON")
-                continue
-            errors = jsonschema_validate(instance, schema_doc)
-            if errors:
-                findings.error(
-                    f"{fixture.relative_to(root)} must satisfy {schema_path.relative_to(root)}: {errors[0]}"
-                )
-        for fixture in json_files(contract_root / "invalid"):
-            instance = load_json(fixture)
-            validated += 1
-            if instance is None:
-                continue
-            errors = jsonschema_validate(instance, schema_doc)
-            if not errors:
-                findings.error(
-                    f"{fixture.relative_to(root)} must be rejected by {schema_path.relative_to(root)}"
-                )
-    findings.note(f"runtime JSON Schema checks exercised {validated} instance(s)")
+
+    valid_instances: dict[str, Any] = {}
+    for fixture in valid_fixtures:
+        key = fixture_schema_key(fixture)
+        candidates = schemas_by_key.get(key, [])
+        if len(candidates) != 1:
+            findings.error(
+                f"{fixture.relative_to(root)} maps to {len(candidates)} schemas; "
+                f"expected exactly one schema named {key}.schema.json"
+            )
+            continue
+        schema_path, schema_doc = candidates[0]
+        instance = load_json(fixture)
+        validated += 1
+        if instance is None:
+            findings.error(f"{fixture.relative_to(root)}: invalid JSON")
+            continue
+        valid_instances[key] = instance
+        errors = jsonschema_validate(instance, schema_doc, registry=registry)
+        if errors:
+            findings.error(
+                f"{fixture.relative_to(root)} must satisfy "
+                f"{schema_path.relative_to(root)}: {errors[0]}"
+            )
+
+    for fixture in invalid_fixtures:
+        key = fixture_schema_key(fixture)
+        candidates = schemas_by_key.get(key, [])
+        if len(candidates) != 1:
+            findings.error(
+                f"{fixture.relative_to(root)} maps to {len(candidates)} schemas; "
+                f"expected exactly one schema named {key}.schema.json"
+            )
+            continue
+        schema_path, schema_doc = candidates[0]
+        instance = load_json(fixture)
+        validated += 1
+        if instance is None:
+            findings.error(
+                f"{fixture.relative_to(root)} is malformed JSON; negative fixtures "
+                "must exercise schema semantics"
+            )
+            continue
+        baseline = valid_instances.get(key)
+        if baseline is None:
+            findings.error(
+                f"{fixture.relative_to(root)} has no matching valid/{key}.json baseline"
+            )
+        else:
+            assert_invalid_fixture_is_isolated(
+                fixture, instance, baseline, findings, root
+            )
+        errors = jsonschema_validate(instance, schema_doc, registry=registry)
+        if not errors:
+            findings.error(
+                f"{fixture.relative_to(root)} must be rejected by "
+                f"{schema_path.relative_to(root)}"
+            )
+
+    if contract_root.is_dir() and not all_fixtures:
+        findings.error("tests/generated-contract exists but contains no JSON fixtures")
+    findings.note(
+        f"runtime JSON Schema checks exercised {validated} instance(s) across "
+        f"{len(schema_docs)} schema(s)"
+    )
+    if all_fixtures:
+        findings.note(
+            f"mapped {len(valid_fixtures)} valid and {len(invalid_fixtures)} invalid "
+            "fixture(s) to schemas by filename"
+        )
 
 
 def check_cli_flags_cross(root: Path, findings: Findings) -> None:
@@ -782,8 +957,8 @@ class SelfTests(unittest.TestCase):
             invalid_dir = root / "tests" / "generated-contract" / "invalid"
             valid_dir.mkdir(parents=True)
             invalid_dir.mkdir(parents=True)
-            (valid_dir / "ok.json").write_text(json.dumps({"PORT": 9}), encoding="utf-8")
-            (invalid_dir / "bad.json").write_text(json.dumps({"PORT": "no"}), encoding="utf-8")
+            (valid_dir / "env.json").write_text(json.dumps({"PORT": 9}), encoding="utf-8")
+            (invalid_dir / "env.wrong-type-PORT.json").write_text(json.dumps({"PORT": "no"}), encoding="utf-8")
             (root / ".cli-flags.toml").write_text(
                 '[flags.port]\nenv = "PORT"\ntype = "integer"\ndefault = 9\n',
                 encoding="utf-8",
@@ -792,6 +967,14 @@ class SelfTests(unittest.TestCase):
             self.assertEqual(findings.errors, [], findings.errors)
             self.assertFalse(is_writable(env_path))
             self.assertTrue(is_writable(root / "generated" / "README.md"))
+            self.assertTrue(
+                any("runtime JSON Schema checks exercised 3 instance(s)" in note for note in findings.notes),
+                findings.notes,
+            )
+            self.assertTrue(
+                any("mapped 1 valid and 1 invalid fixture(s)" in note for note in findings.notes),
+                findings.notes,
+            )
 
     def test_writable_policy_skips_chmod(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -828,10 +1011,15 @@ class SelfTests(unittest.TestCase):
             (root / "json-schema" / "env.schema.json").write_text(
                 json.dumps(schema), encoding="utf-8"
             )
+            valid_dir = root / "tests" / "generated-contract" / "valid"
             invalid_dir = root / "tests" / "generated-contract" / "invalid"
+            valid_dir.mkdir(parents=True)
             invalid_dir.mkdir(parents=True)
-            (invalid_dir / "extra.json").write_text(
-                json.dumps({"PORT": 1, "NOPE": True}), encoding="utf-8"
+            (valid_dir / "env.json").write_text(
+                json.dumps({"PORT": 1}), encoding="utf-8"
+            )
+            (invalid_dir / "env.unknown-field.json").write_text(
+                json.dumps({"PORT": 1, "__unexpected_field__": True}), encoding="utf-8"
             )
             # This extra key should be rejected; if schema is too loose the checker errors.
             findings = run_checks(root, freeze=False, require_readonly=False)

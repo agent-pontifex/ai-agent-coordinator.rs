@@ -19,5 +19,5 @@
   "consistency": "strong",
   "versioning": "none",
   "change_tracking": "none",
-  "__unexpected_field__": "drift"
+  "__unexpected_field__": true
 }

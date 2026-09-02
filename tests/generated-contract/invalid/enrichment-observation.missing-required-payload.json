@@ -1,9 +1,21 @@
 {
-  "observation_id": "x",
-  "asset_id": "x",
-  "variant_id": "x",
+  "observation_id": "00000000-0000-4000-8000-000000000001",
+  "asset_id": "00000000-0000-4000-8000-000000000002",
+  "variant_id": "00000000-0000-4000-8000-000000000003",
   "kind": "ocr_span",
   "status": "generated",
-  "provenance": "x",
-  "created_at": "x"
+  "provenance": {
+    "provider": "openai",
+    "runtime": "agent-pontifex",
+    "model": "example-model",
+    "model_revision": "2026-09-01",
+    "recipe": "ocr-v1",
+    "source_variant_digest": {
+      "algorithm": "sha256",
+      "hex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "bytes": 123
+    },
+    "created_at": "2026-09-01T12:00:00Z"
+  },
+  "created_at": "2026-09-01T12:00:00Z"
 }
