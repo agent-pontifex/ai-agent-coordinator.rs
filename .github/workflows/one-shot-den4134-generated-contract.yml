@@ -34,7 +34,7 @@ jobs:
 
           payload=.github/den4134-generated-contract-fix.tar.gz.b64
           archive=/tmp/den4134-generated-contract-fix.tar.gz
-          base64 --decode "$payload" > "$archive"
+          cp -- "$payload" "$archive"
           echo "9dc8c83dd55ba92ed243dfc49ddcecb0026c7e1c47f34dc02eca53ae800882f9  $archive" | sha256sum --check --strict
 
           while IFS= read -r path; do
