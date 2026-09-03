@@ -1,0 +1,102 @@
+name: DEN-3138 exact-head repair finalizer
+
+"on":
+  push:
+    branches:
+      - feat/den-3138-runtime-worker-authorization
+
+permissions:
+  contents: write
+
+concurrency:
+  group: den-3138-exact-head-finalizer
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out the exact carrier head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 3
+      - name: Set up pinned Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.11"
+      - name: Install the pinned Draft 2020-12 validator
+        run: >-
+          python3 -m pip install --quiet --disable-pip-version-check
+          jsonschema==4.25.1
+      - name: Install the pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.97.0
+          components: rustfmt, clippy
+      - name: Recover, apply, and validate the exact reviewed patch
+        shell: bash
+        env:
+          EXPECTED_PARENT: f6f18492645fd3781d338cc2918f88bceb58c490
+          EXPECTED_BASE: 529efabab81966927c1dd49d0512fd65999024c9
+          EXPECTED_PATCH_SHA256: 0505bae7105e7668f0bb79d167b859a784005f85f3353629e2dfe3e805d4dfe7
+          OLD_CARRIER: .github/workflows/den-3138-exact-head-repair.yml
+          FINALIZER: .github/workflows/den-3138-exact-head-finalizer.yml
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_PARENT"
+          test "$GITHUB_REF_NAME" = feat/den-3138-runtime-worker-authorization
+          diff -u <(cat <<'EXPECTED'
+          .github/workflows/den-3138-exact-head-finalizer.yml
+          .github/workflows/den-3138-exact-head-repair.yml
+          EXPECTED
+          ) <(git diff --name-only "$EXPECTED_BASE" | sort)
+          python3 - <<'PY'
+          from pathlib import Path
+
+          carrier = Path(".github/workflows/den-3138-exact-head-repair.yml").read_text()
+          marker = "<<'PATCH_B64'\n"
+          tail = "\n          PATCH_B64"
+          encoded = carrier.split(marker, 1)[1].split(tail, 1)[0]
+          lines = [line[10:] if line.startswith("          ") else line for line in encoded.splitlines()]
+          Path("/tmp/repair.patch.gz.b64").write_text("\n".join(lines) + "\n")
+          PY
+          base64 --decode /tmp/repair.patch.gz.b64 > /tmp/repair.patch.gz
+          gzip --decompress --stdout /tmp/repair.patch.gz > /tmp/repair.patch
+          echo "$EXPECTED_PATCH_SHA256  /tmp/repair.patch" | sha256sum --check --strict
+          git apply --check /tmp/repair.patch
+          git apply /tmp/repair.patch
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+          cargo test --locked --all
+          python3 -m py_compile scripts/*.py
+          python3 -m unittest -v scripts/test_validate_agents_md.py
+          python3 scripts/validate_agents_md.py --repo-root . --start-dir src
+          python3 scripts/check-generated-contract.py --self-test
+          python3 scripts/check-generated-contract.py --freeze --require-readonly
+          python3 scripts/test-oci-workflow.py
+          rm "$OLD_CARRIER" "$FINALIZER"
+          git diff --check
+          test -z "$(grep -RIlE '^(<<<<<<<|=======|>>>>>>>)' --exclude-dir=.git . || true)"
+          diff -u <(cat <<'EXPECTED'
+          README.md
+          docs/protected-worker-authority.md
+          src/app.rs
+          src/db.rs
+          src/jobs.rs
+          src/telemetry.rs
+          src/worker_authority.rs
+          tests/job_queue.rs
+          EXPECTED
+          ) <(git diff --name-only "$EXPECTED_BASE" | sort)
+      - name: Commit the validated repair and remove both carriers
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add README.md docs/protected-worker-authority.md src/app.rs src/db.rs src/jobs.rs src/telemetry.rs src/worker_authority.rs tests/job_queue.rs .github/workflows/den-3138-exact-head-repair.yml .github/workflows/den-3138-exact-head-finalizer.yml
+          git commit -m 'fix(DEN-3138): fence leases and prefilter authorized claims'
+          git push origin "HEAD:$GITHUB_REF_NAME"
