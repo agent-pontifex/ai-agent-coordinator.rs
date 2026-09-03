@@ -47,6 +47,10 @@ jobs:
               line[10:] if line.startswith("          ") else line
               for line in lines
           )
+          program = program.replace(
+              'raise SystemExit(f"{path}: expected one replacement, found {count}")',
+              'raise SystemExit(f"{path}: missing exact block {old[:120]!r}; found {count}")',
+          )
           exec(compile(program, "worker-authority-runtime", "exec"), {})
           PY
       - name: Canonically format and validate
