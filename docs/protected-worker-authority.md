@@ -38,16 +38,23 @@ preserves unprotected work while making every protected task ineligible.
 
 Protected claims require an explicit task filter containing only the exact task
 bound to the authenticated worker. Empty, mixed protected/unprotected, foreign,
-or impersonated filters fail closed. Heartbeat and completion authorization
-rechecks the current job task and exact lease holder before persistence applies
-its own compare-and-set conditions.
+or impersonated filters fail closed. A presented credential is authenticated
+before the job is loaded, so unauthenticated callers cannot use mutation routes
+as a job-existence oracle. Heartbeat and completion authorization rechecks the
+current job task, exact lease holder, positive `lease_attempt`, and unexpired
+lease before persistence applies the same worker, attempt, status, and expiry
+conditions. The claim response's `job.attempts` value is the lease fence that a
+protected worker must echo.
 
 Generic database claims use an explicit `ExcludeProtected` policy even when the
 request has no task filter. A protected task is selectable only through
-`claim_job_authorized` with the exact server-derived role policy. The
-PostgreSQL regression places a higher-priority protected job ahead of an
-ordinary job and proves that the broad worker still receives only the ordinary
-job.
+`claim_job_authorized` with the exact server-derived role policy. Authorization,
+organization, repository, and task filters are applied before the bounded
+`FOR UPDATE SKIP LOCKED` candidate window. PostgreSQL regressions place more
+than one full candidate window of higher-priority protected jobs ahead of an
+ordinary job and prove that a broad worker still receives the ordinary job.
+They also prove that expired leases and stale claim generations cannot heartbeat
+or complete a reacquired lease.
 
 ## Runtime enforcement status
 

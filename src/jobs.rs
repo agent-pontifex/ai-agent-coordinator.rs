@@ -167,6 +167,10 @@ fn default_lease_seconds() -> i64 {
 #[derive(Debug, Clone, Deserialize)]
 pub struct HeartbeatJobRequest {
     pub worker_id: String,
+    /// Monotonic claim generation returned as `job.attempts` by the claim response.
+    /// Protected workers must echo it so a stale process cannot renew a later lease.
+    #[serde(default)]
+    pub lease_attempt: Option<i64>,
     #[serde(default = "default_lease_seconds")]
     pub lease_seconds: i64,
 }
@@ -174,6 +178,10 @@ pub struct HeartbeatJobRequest {
 #[derive(Debug, Clone, Deserialize)]
 pub struct CompleteJobRequest {
     pub worker_id: String,
+    /// Monotonic claim generation returned as `job.attempts` by the claim response.
+    /// Protected workers must echo it so a stale process cannot complete a later lease.
+    #[serde(default)]
+    pub lease_attempt: Option<i64>,
     pub outcome: CompletionOutcome,
     pub result: Option<Value>,
     pub error: Option<String>,

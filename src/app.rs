@@ -146,16 +146,30 @@ impl AppState {
         }
     }
 
+    fn authenticate_worker_bearer<'a>(
+        &self,
+        headers: &'a HeaderMap,
+    ) -> Result<Option<&'a str>, AppError> {
+        let bearer = self.bearer(headers)?;
+        if let Some(value) = bearer {
+            self.worker_authority
+                .authenticate_presented_bearer(value)
+                .map_err(map_worker_authority_error)?;
+        }
+        Ok(bearer)
+    }
+
     fn authorize_worker_mutation(
         &self,
-        headers: &HeaderMap,
+        bearer: Option<&str>,
         job: &Job,
         supplied_worker_id: &str,
+        supplied_lease_attempt: Option<i64>,
     ) -> Result<AuthorizedWorker, AppError> {
-        match self.bearer(headers)? {
+        match bearer {
             Some(bearer) => self
                 .worker_authority
-                .authorize_job_mutation(bearer, job, supplied_worker_id)
+                .authorize_job_mutation(bearer, job, supplied_worker_id, supplied_lease_attempt)
                 .map_err(map_worker_authority_error),
             None => {
                 if is_protected_task_type(&job.task_type) {
@@ -168,8 +182,16 @@ impl AppState {
                         "worker_id must not be empty".to_owned(),
                     ));
                 }
+                if supplied_lease_attempt.is_some_and(|lease_attempt| {
+                    lease_attempt <= 0 || lease_attempt != job.attempts
+                }) {
+                    return Err(AppError::Forbidden(
+                        "worker supplied a stale or invalid lease_attempt".to_owned(),
+                    ));
+                }
                 Ok(AuthorizedWorker {
                     worker_id: supplied_worker_id.to_owned(),
+                    lease_attempt: supplied_lease_attempt,
                     profile: None,
                 })
             }
@@ -342,16 +364,27 @@ async fn heartbeat_job(
     Path(id): Path<String>,
     Json(request): Json<HeartbeatJobRequest>,
 ) -> Result<Json<Value>, AppError> {
+    let bearer = state.authenticate_worker_bearer(&headers)?;
     let current = state
         .database
         .get_job(&id)
         .await
         .map_err(AppError::Internal)?
         .ok_or_else(|| AppError::NotFound(format!("job {id}")))?;
-    let authorized = state.authorize_worker_mutation(&headers, &current, &request.worker_id)?;
+    let authorized = state.authorize_worker_mutation(
+        bearer,
+        &current,
+        &request.worker_id,
+        request.lease_attempt,
+    )?;
     let job = state
         .database
-        .heartbeat_job(&id, &authorized.worker_id, request.lease_seconds)
+        .heartbeat_job(
+            &id,
+            &authorized.worker_id,
+            authorized.lease_attempt,
+            request.lease_seconds,
+        )
         .await
         .map_err(|error| AppError::BadRequest(error.to_string()))?;
     Ok(Json(json!({"job": job})))
@@ -363,14 +396,21 @@ async fn complete_job(
     Path(id): Path<String>,
     Json(mut request): Json<CompleteJobRequest>,
 ) -> Result<Json<Value>, AppError> {
+    let bearer = state.authenticate_worker_bearer(&headers)?;
     let current = state
         .database
         .get_job(&id)
         .await
         .map_err(AppError::Internal)?
         .ok_or_else(|| AppError::NotFound(format!("job {id}")))?;
-    let authorized = state.authorize_worker_mutation(&headers, &current, &request.worker_id)?;
+    let authorized = state.authorize_worker_mutation(
+        bearer,
+        &current,
+        &request.worker_id,
+        request.lease_attempt,
+    )?;
     request.worker_id = authorized.worker_id;
+    request.lease_attempt = authorized.lease_attempt;
     let job = state
         .database
         .complete_job(&id, &request)
@@ -457,6 +497,7 @@ async fn deliver_next_linear_job(
                     &job.id,
                     &CompleteJobRequest {
                         worker_id,
+                        lease_attempt: Some(job.attempts),
                         outcome: CompletionOutcome::Succeeded,
                         result: Some(result),
                         error: None,
@@ -479,6 +520,7 @@ async fn deliver_next_linear_job(
                     &job.id,
                     &CompleteJobRequest {
                         worker_id,
+                        lease_attempt: Some(job.attempts),
                         outcome: CompletionOutcome::Failed,
                         result: None,
                         error: Some(error.public_message.clone()),

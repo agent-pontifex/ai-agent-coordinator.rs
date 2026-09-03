@@ -12,9 +12,9 @@ use sea_orm::{
     sea_query::{Expr, LockBehavior, LockType, OnConflict},
     AccessMode, ActiveModelTrait,
     ActiveValue::Set,
-    ColumnTrait, ConnectOptions, Database as SeaDatabase, DatabaseConnection, DatabaseTransaction,
-    EntityTrait, IsolationLevel, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
-    TransactionTrait,
+    ColumnTrait, Condition, ConnectOptions, Database as SeaDatabase, DatabaseConnection,
+    DatabaseTransaction, EntityTrait, IsolationLevel, PaginatorTrait, QueryFilter, QueryOrder,
+    QuerySelect, TransactionTrait,
 };
 use uuid::Uuid;
 
@@ -24,7 +24,7 @@ use crate::{
     jobs::{
         ClaimJobRequest, CompleteJobRequest, CompletionOutcome, CreateJobRequest, Job, JobStatus,
     },
-    worker_authority::ClaimTaskPolicy,
+    worker_authority::{ClaimTaskPolicy, PROTECTED_TASK_TYPES},
 };
 
 const SERIALIZABLE_RETRIES: usize = 4;
@@ -243,10 +243,43 @@ impl Database {
             .exec(&transaction)
             .await?;
 
-        let candidates = jobs::Entity::find()
+        let mut candidate_query = jobs::Entity::find()
             .filter(jobs::Column::Status.eq(JobStatus::Queued.as_str()))
             .filter(jobs::Column::AvailableAt.lte(now))
-            .filter(Expr::col(jobs::Column::Attempts).lt(Expr::col(jobs::Column::MaxAttempts)))
+            .filter(Expr::col(jobs::Column::Attempts).lt(Expr::col(jobs::Column::MaxAttempts)));
+
+        if !request.orgs.is_empty() {
+            candidate_query = candidate_query.filter(jobs::Column::Org.is_in(request.orgs.clone()));
+        }
+        if !request.task_types.is_empty() {
+            candidate_query =
+                candidate_query.filter(jobs::Column::TaskType.is_in(request.task_types.clone()));
+        }
+        if !request.repositories.is_empty() {
+            let mut repositories = Condition::any();
+            for repository in &request.repositories {
+                if let Some((org, repo)) = repository.split_once('/') {
+                    repositories = repositories.add(
+                        Condition::all()
+                            .add(jobs::Column::Org.eq(org))
+                            .add(jobs::Column::Repo.eq(repo)),
+                    );
+                } else {
+                    repositories = repositories.add(jobs::Column::Repo.eq(repository));
+                }
+            }
+            candidate_query = candidate_query.filter(repositories);
+        }
+        candidate_query = match policy {
+            ClaimTaskPolicy::ExcludeProtected => {
+                candidate_query.filter(jobs::Column::TaskType.is_not_in(PROTECTED_TASK_TYPES))
+            }
+            ClaimTaskPolicy::Only(allowed) => {
+                candidate_query.filter(jobs::Column::TaskType.is_in(allowed.iter().cloned()))
+            }
+        };
+
+        let candidates = candidate_query
             .order_by_desc(jobs::Column::Priority)
             .order_by_asc(jobs::Column::CreatedAt)
             .limit(200)
@@ -316,6 +349,7 @@ impl Database {
         &self,
         id: &str,
         worker_id: &str,
+        lease_attempt: Option<i64>,
         lease_seconds: i64,
     ) -> Result<Job> {
         if !(15..=3600).contains(&lease_seconds) {
@@ -323,7 +357,7 @@ impl Database {
         }
         let now = Utc::now();
         let lease_expires_at = now + ChronoDuration::seconds(lease_seconds);
-        let updated = jobs::Entity::update_many()
+        let mut update = jobs::Entity::update_many()
             .col_expr(
                 jobs::Column::LeaseExpiresAt,
                 Expr::value(Some(lease_expires_at)),
@@ -332,11 +366,18 @@ impl Database {
             .filter(jobs::Column::Id.eq(id))
             .filter(jobs::Column::Status.eq(JobStatus::Running.as_str()))
             .filter(jobs::Column::ClaimedBy.eq(worker_id))
-            .exec(&self.connection)
-            .await?;
+            .filter(jobs::Column::LeaseExpiresAt.is_not_null())
+            .filter(jobs::Column::LeaseExpiresAt.gt(now));
+        if let Some(expected_attempt) = lease_attempt {
+            if expected_attempt <= 0 {
+                return Err(anyhow!("lease_attempt must be positive"));
+            }
+            update = update.filter(jobs::Column::Attempts.eq(expected_attempt));
+        }
+        let updated = update.exec(&self.connection).await?;
         if updated.rows_affected != 1 {
             return Err(anyhow!(
-                "job is not running, does not exist, or is leased by another worker"
+                "job is not running, has an expired lease, has a stale lease_attempt, does not exist, or is leased by another worker"
             ));
         }
         self.get_job(id)
@@ -361,6 +402,18 @@ impl Database {
         }
 
         let now = Utc::now();
+        if job
+            .lease_expires_at
+            .as_ref()
+            .is_none_or(|lease_expires_at| lease_expires_at <= &now)
+        {
+            return Err(anyhow!("job lease has expired or is missing"));
+        }
+        if let Some(expected_attempt) = request.lease_attempt {
+            if expected_attempt <= 0 || expected_attempt != job.attempts {
+                return Err(anyhow!("job lease_attempt is stale or invalid"));
+            }
+        }
         let mut active: jobs::ActiveModel = model.into();
         active.result = Set(request.result.clone());
         active.claimed_by = Set(None);

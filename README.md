@@ -193,7 +193,10 @@ curl http://localhost:8080/v1/jobs/claim \
   }'
 ```
 
-A `204 No Content` response means there is currently no matching work.
+A `204 No Content` response means there is currently no matching work. The
+claim response's positive `job.attempts` value is the lease generation. Workers
+should retain it as `lease_attempt`; protected workers must echo it on heartbeat
+and completion so a process from an earlier lease cannot mutate a later claim.
 
 ### Heartbeat
 
@@ -201,7 +204,7 @@ A `204 No Content` response means there is currently no matching work.
 curl http://localhost:8080/v1/jobs/JOB_ID/heartbeat \
   -H "Authorization: Bearer $COORDINATOR_API_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"worker_id":"worker-us-east-1-07","lease_seconds":180}'
+  -d '{"worker_id":"worker-us-east-1-07","lease_attempt":1,"lease_seconds":180}'
 ```
 
 ### Complete or retry
@@ -212,6 +215,7 @@ curl http://localhost:8080/v1/jobs/JOB_ID/complete \
   -H "Content-Type: application/json" \
   -d '{
     "worker_id": "worker-us-east-1-07",
+    "lease_attempt": 1,
     "outcome": "failed",
     "error": "test environment unavailable",
     "retryable": true,
@@ -219,7 +223,14 @@ curl http://localhost:8080/v1/jobs/JOB_ID/complete \
   }'
 ```
 
-Expired leases are returned to the queue until `max_attempts` is reached. Claims use serializable PostgreSQL transactions plus row locks to enforce the configured running-job cap for both the organization and repository across coordinator replicas.
+Expired leases are returned to the queue until `max_attempts` is reached. An
+expired lease cannot be renewed or completed. When `lease_attempt` is supplied,
+persistence compares it with the current monotonic claim generation; protected
+worker mutations require it. Candidate authorization and caller filters are
+applied before the bounded lock window, so a high-priority protected backlog
+cannot starve an ordinary worker. Claims use serializable PostgreSQL transactions
+plus row locks to enforce the configured running-job cap for both the
+organization and repository across coordinator replicas.
 
 ## PostgreSQL schema and migrations
 
