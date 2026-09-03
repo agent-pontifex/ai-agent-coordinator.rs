@@ -649,9 +649,7 @@ fn validate_env_name(value: &str) -> Result<(), WorkerAuthorityError> {
     let first = bytes
         .next()
         .is_some_and(|byte| byte == b'_' || byte.is_ascii_uppercase());
-    let rest = bytes.all(|byte| {
-        byte == b'_' || byte.is_ascii_uppercase() || byte.is_ascii_digit()
-    });
+    let rest = bytes.all(|byte| byte == b'_' || byte.is_ascii_uppercase() || byte.is_ascii_digit());
     if !first || !rest {
         return Err(WorkerAuthorityError::InvalidConfiguration(
             "worker credential environment names must match [A-Z_][A-Z0-9_]*".to_owned(),
@@ -818,12 +816,11 @@ mod tests {
 
     fn registry() -> (WorkerAuthorityRegistry, HashMap<String, String>) {
         let (config, tokens) = fixture();
-        let registry = WorkerAuthorityRegistry::from_config_with_lookup(
-            &config,
-            Some(ADMIN),
-            |name| tokens.get(name).cloned(),
-        )
-        .expect("valid registry");
+        let registry =
+            WorkerAuthorityRegistry::from_config_with_lookup(&config, Some(ADMIN), |name| {
+                tokens.get(name).cloned()
+            })
+            .expect("valid registry");
         (registry, tokens)
     }
 
@@ -877,25 +874,25 @@ mod tests {
         let (config, mut tokens) = fixture();
         let duplicate = tokens["WORKER_TOKEN_OPENAI"].clone();
         tokens.insert("WORKER_TOKEN_ANTHROPIC".to_owned(), duplicate);
-        assert!(WorkerAuthorityRegistry::from_config_with_lookup(
-            &config,
-            Some(ADMIN),
-            |name| tokens.get(name).cloned(),
-        )
-        .unwrap_err()
-        .to_string()
-        .contains("distinct bearer"));
+        assert!(
+            WorkerAuthorityRegistry::from_config_with_lookup(&config, Some(ADMIN), |name| tokens
+                .get(name)
+                .cloned(),)
+            .unwrap_err()
+            .to_string()
+            .contains("distinct bearer")
+        );
 
         let (config, mut tokens) = fixture();
         tokens.insert("WORKER_TOKEN_OPENAI".to_owned(), ADMIN.to_owned());
-        assert!(WorkerAuthorityRegistry::from_config_with_lookup(
-            &config,
-            Some(ADMIN),
-            |name| tokens.get(name).cloned(),
-        )
-        .unwrap_err()
-        .to_string()
-        .contains("admin bearer"));
+        assert!(
+            WorkerAuthorityRegistry::from_config_with_lookup(&config, Some(ADMIN), |name| tokens
+                .get(name)
+                .cloned(),)
+            .unwrap_err()
+            .to_string()
+            .contains("admin bearer")
+        );
     }
 
     #[test]
@@ -924,9 +921,7 @@ mod tests {
         let finalizer = config
             .profiles
             .iter_mut()
-            .find(|profile| {
-                profile.role == ProtectedWorkerRole::ReconciliationLinearFinalizer
-            })
+            .find(|profile| profile.role == ProtectedWorkerRole::ReconciliationLinearFinalizer)
             .expect("linear finalizer");
         finalizer.provider = Some("openai".to_owned());
         finalizer.signing_key_id = Some("key:bad".to_owned());
@@ -946,10 +941,7 @@ mod tests {
             assert!(!authorized.policy.allows(task_type));
         }
         assert!(registry
-            .authorize_claim(
-                ADMIN,
-                &claim("generic-worker", &[LINEAR_OPINION_CHATGPT]),
-            )
+            .authorize_claim(ADMIN, &claim("generic-worker", &[LINEAR_OPINION_CHATGPT]),)
             .is_err());
     }
 
@@ -994,10 +986,7 @@ mod tests {
     fn heartbeat_and_completion_reauthorize_exact_task_and_lease() {
         let (registry, tokens) = registry();
         let bearer = &tokens["WORKER_TOKEN_ANTHROPIC"];
-        let job = running_job(
-            LINEAR_OPINION_CLAUDE,
-            Some("linear-opinion-anthropic"),
-        );
+        let job = running_job(LINEAR_OPINION_CLAUDE, Some("linear-opinion-anthropic"));
         let authorized = registry
             .authorize_job_mutation(bearer, &job, "linear-opinion-anthropic")
             .expect("authorized protected mutation");
@@ -1077,18 +1066,16 @@ mod tests {
         assert!(build(&config, &tokens).is_err());
 
         let (config, tokens) = fixture();
-        assert!(WorkerAuthorityRegistry::from_config_with_lookup(
-            &config,
-            Some(ADMIN),
-            |name| {
+        assert!(
+            WorkerAuthorityRegistry::from_config_with_lookup(&config, Some(ADMIN), |name| {
                 if name == "WORKER_TOKEN_OPENAI" {
                     None
                 } else {
                     tokens.get(name).cloned()
                 }
-            },
-        )
-        .is_err());
+            },)
+            .is_err()
+        );
     }
 
     fn build(
