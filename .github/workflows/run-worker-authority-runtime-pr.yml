@@ -35,7 +35,6 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          from textwrap import dedent
 
           source = Path(
               ".github/workflows/apply-worker-authority-runtime-once.yml"
@@ -43,7 +42,11 @@ jobs:
           marker = "          python3 - <<'PY'\n"
           start = source.index(marker) + len(marker)
           end = source.index("\n          PY\n", start)
-          program = dedent(source[start:end])
+          lines = source[start:end].splitlines()
+          program = "\n".join(
+              line[10:] if line.startswith("          ") else line
+              for line in lines
+          )
           exec(compile(program, "worker-authority-runtime", "exec"), {})
           PY
       - name: Canonically format and validate
