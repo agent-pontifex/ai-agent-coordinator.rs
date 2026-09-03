@@ -20,3 +20,4 @@ pub mod security;
 pub mod slack_run;
 pub mod telemetry;
 pub mod webhooks;
+pub mod worker_authority;
