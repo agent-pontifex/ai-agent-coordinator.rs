@@ -47,9 +47,23 @@ jobs:
               line[10:] if line.startswith("          ") else line
               for line in lines
           )
-          program = program.replace(
-              'raise SystemExit(f"{path}: expected one replacement, found {count}")',
-              'raise SystemExit(f"{path}: missing exact block {old[:120]!r}; found {count}")',
+          helper_start = program.index("def replace_once(")
+          helper_end = program.index("\n\nreplace_once(", helper_start)
+          diagnostic_helper = '''def replace_once(path: str, old: str, new: str) -> None:
+    target = Path(path)
+    text = target.read_text(encoding="utf-8")
+    count = text.count(old)
+    if count != 1:
+        first_line = old.splitlines()[0] if old.splitlines() else "<empty>"
+        raise SystemExit(
+            f"{path}: exact replacement {first_line!r} matched {count} times"
+        )
+    target.write_text(text.replace(old, new, 1), encoding="utf-8")
+'''
+          program = (
+              program[:helper_start]
+              + diagnostic_helper
+              + program[helper_end:]
           )
           exec(compile(program, "worker-authority-runtime", "exec"), {})
           PY
