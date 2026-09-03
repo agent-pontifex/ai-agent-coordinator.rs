@@ -56,6 +56,17 @@ ordinary job and prove that a broad worker still receives the ordinary job.
 They also prove that expired leases and stale claim generations cannot heartbeat
 or complete a reacquired lease.
 
+## Hardening review disposition
+
+The exact-head hardening review closed four fail-closed gaps without activating
+any worker or external authority: legacy administrative credentials retain their
+bounded compatibility range while protected-worker bearers retain the stronger
+minimum; authentication precedes resource lookup; mutation compare-and-set
+includes the current positive lease generation and an unexpired lease; and all
+authority filters execute before the bounded lock window. Dedicated unit and
+PostgreSQL regressions cover each condition, including a protected backlog larger
+than the candidate window.
+
 ## Runtime enforcement status
 
 The stacked runtime change completes the source-level enforcement steps:
