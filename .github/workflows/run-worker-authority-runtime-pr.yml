@@ -42,11 +42,22 @@ jobs:
           marker = "          python3 - <<'PY'\n"
           start = source.index(marker) + len(marker)
           end = source.index("\n          PY\n", start)
-          lines = source[start:end].splitlines()
-          program = "\n".join(
-              line[10:] if line.startswith("          ") else line
-              for line in lines
-          )
+          extracted = source[start:end].splitlines()
+          program_lines = []
+          in_triple = False
+          for line in extracted:
+              if in_triple:
+                  program_lines.append(line)
+                  if line.count("'''") % 2 == 1:
+                      in_triple = False
+                  continue
+              normalized = line[10:] if line.startswith("          ") else line
+              program_lines.append(normalized)
+              if normalized.count("'''") % 2 == 1:
+                  in_triple = True
+          if in_triple:
+              raise SystemExit("unterminated embedded Python triple-quoted string")
+          program = "\n".join(program_lines)
           helper_start = program.index("def replace_once(")
           helper_end = program.index("\n\nreplace_once(", helper_start)
           diagnostic_helper = "\n".join([
