@@ -30,7 +30,7 @@ jobs:
         with:
           toolchain: 1.97.0
           components: rustfmt, clippy
-      - name: Apply the reviewed exact-replacement program
+      - name: Apply reviewed exact-replacement program
         shell: bash
         run: |
           python3 - <<'PY'
@@ -49,22 +49,19 @@ jobs:
           )
           helper_start = program.index("def replace_once(")
           helper_end = program.index("\n\nreplace_once(", helper_start)
-          diagnostic_helper = '''def replace_once(path: str, old: str, new: str) -> None:
-    target = Path(path)
-    text = target.read_text(encoding="utf-8")
-    count = text.count(old)
-    if count != 1:
-        first_line = old.splitlines()[0] if old.splitlines() else "<empty>"
-        raise SystemExit(
-            f"{path}: exact replacement {first_line!r} matched {count} times"
-        )
-    target.write_text(text.replace(old, new, 1), encoding="utf-8")
-'''
-          program = (
-              program[:helper_start]
-              + diagnostic_helper
-              + program[helper_end:]
-          )
+          diagnostic_helper = "\n".join([
+              "def replace_once(path: str, old: str, new: str) -> None:",
+              "    target = Path(path)",
+              "    text = target.read_text(encoding=\"utf-8\")",
+              "    count = text.count(old)",
+              "    if count != 1:",
+              "        first_line = old.splitlines()[0] if old.splitlines() else \"<empty>\"",
+              "        raise SystemExit(",
+              "            f\"{path}: exact replacement {first_line!r} matched {count} times\"",
+              "        )",
+              "    target.write_text(text.replace(old, new, 1), encoding=\"utf-8\")",
+          ]) + "\n"
+          program = program[:helper_start] + diagnostic_helper + program[helper_end:]
           exec(compile(program, "worker-authority-runtime", "exec"), {})
           PY
       - name: Canonically format and validate
