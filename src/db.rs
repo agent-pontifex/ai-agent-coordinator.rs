@@ -24,6 +24,7 @@ use crate::{
     jobs::{
         ClaimJobRequest, CompleteJobRequest, CompletionOutcome, CreateJobRequest, Job, JobStatus,
     },
+    worker_authority::ClaimTaskPolicy,
 };
 
 const SERIALIZABLE_RETRIES: usize = 4;
@@ -166,10 +167,20 @@ impl Database {
         request: &ClaimJobRequest,
         worker_config: &WorkerConfig,
     ) -> Result<Option<Job>> {
+        self.claim_job_authorized(request, worker_config, &ClaimTaskPolicy::ExcludeProtected)
+            .await
+    }
+
+    pub async fn claim_job_authorized(
+        &self,
+        request: &ClaimJobRequest,
+        worker_config: &WorkerConfig,
+        policy: &ClaimTaskPolicy,
+    ) -> Result<Option<Job>> {
         request.validate().map_err(anyhow::Error::msg)?;
 
         for attempt in 0..SERIALIZABLE_RETRIES {
-            match self.claim_job_once(request, worker_config).await {
+            match self.claim_job_once(request, worker_config, policy).await {
                 Ok(job) => return Ok(job),
                 Err(error)
                     if attempt + 1 < SERIALIZABLE_RETRIES && is_serialization_failure(&error) =>
@@ -186,6 +197,7 @@ impl Database {
         &self,
         request: &ClaimJobRequest,
         worker_config: &WorkerConfig,
+        policy: &ClaimTaskPolicy,
     ) -> Result<Option<Job>> {
         let transaction = self
             .connection
@@ -244,7 +256,7 @@ impl Database {
 
         for candidate_model in candidates {
             let candidate = model_to_job(candidate_model)?;
-            if !request.accepts(&candidate) {
+            if !policy.allows(&candidate.task_type) || !request.accepts(&candidate) {
                 continue;
             }
 

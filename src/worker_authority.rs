@@ -222,7 +222,7 @@ impl WorkerAuthorityRegistry {
     {
         let admin_digest = match admin_bearer {
             Some(value) => {
-                validate_bearer(value)?;
+                validate_admin_bearer(value)?;
                 Some(bearer_digest(value))
             }
             None => None,
@@ -623,6 +623,15 @@ fn require_unique(
     if !values.insert(value.to_owned()) {
         return Err(WorkerAuthorityError::InvalidConfiguration(
             message.to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_admin_bearer(value: &str) -> Result<(), WorkerAuthorityError> {
+    if value.is_empty() || value.len() > 512 || !value.bytes().all(|byte| byte.is_ascii_graphic()) {
+        return Err(WorkerAuthorityError::InvalidConfiguration(
+            "the coordinator admin bearer must contain 1-512 visible ASCII bytes".to_owned(),
         ));
     }
     Ok(())

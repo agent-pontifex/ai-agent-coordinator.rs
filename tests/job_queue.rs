@@ -2,6 +2,7 @@ use ai_agent_coordinator::{
     config::WorkerConfig,
     db::Database,
     jobs::{ClaimJobRequest, CompleteJobRequest, CompletionOutcome, CreateJobRequest, JobStatus},
+    worker_authority::{ClaimTaskPolicy, LINEAR_OPINION_CHATGPT},
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -130,4 +131,71 @@ async fn repository_concurrency_cap_prevents_overclaiming() {
         .filter(Option::is_some)
         .count();
     assert_eq!(claimed, 1);
+}
+
+#[tokio::test]
+async fn broad_workers_cannot_claim_protected_tasks() {
+    let Some(database) = test_database().await else {
+        return;
+    };
+    let org = format!("protected-claim-{}", Uuid::new_v4());
+    for (task_type, priority) in [(LINEAR_OPINION_CHATGPT, 100), ("code_change", 0)] {
+        database
+            .create_job(
+                &CreateJobRequest {
+                    org: org.clone(),
+                    repo: "coordinator".to_owned(),
+                    task_type: task_type.to_owned(),
+                    payload: json!({"test": "protected-claim-boundary"}),
+                    priority,
+                    max_attempts: 3,
+                    available_at: None,
+                    budget_usd: None,
+                },
+                Some(&format!("{task_type}:{}", Uuid::new_v4())),
+            )
+            .await
+            .unwrap();
+    }
+
+    let broad = ClaimJobRequest {
+        worker_id: "generic-worker".to_owned(),
+        orgs: vec![org.clone()],
+        repositories: vec![],
+        task_types: vec![],
+        lease_seconds: 60,
+    };
+    let first = database
+        .claim_job(&broad, &WorkerConfig::default())
+        .await
+        .unwrap()
+        .expect("generic worker should receive the unprotected job");
+    assert_eq!(first.task_type, "code_change");
+    assert!(database
+        .claim_job(&broad, &WorkerConfig::default())
+        .await
+        .unwrap()
+        .is_none());
+
+    let protected = ClaimJobRequest {
+        worker_id: "linear-opinion-openai".to_owned(),
+        orgs: vec![org],
+        repositories: vec![],
+        task_types: vec![LINEAR_OPINION_CHATGPT.to_owned()],
+        lease_seconds: 60,
+    };
+    assert!(database
+        .claim_job(&protected, &WorkerConfig::default())
+        .await
+        .unwrap()
+        .is_none());
+
+    let policy = ClaimTaskPolicy::Only([LINEAR_OPINION_CHATGPT.to_owned()].into_iter().collect());
+    let claimed = database
+        .claim_job_authorized(&protected, &WorkerConfig::default(), &policy)
+        .await
+        .unwrap()
+        .expect("the exact role policy should receive its protected task");
+    assert_eq!(claimed.task_type, LINEAR_OPINION_CHATGPT);
+    assert_eq!(claimed.claimed_by.as_deref(), Some("linear-opinion-openai"));
 }
