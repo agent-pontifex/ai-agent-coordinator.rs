@@ -222,7 +222,7 @@ impl WorkerAuthorityRegistry {
     {
         let admin_digest = match admin_bearer {
             Some(value) => {
-                validate_bearer(value)?;
+                validate_admin_bearer(value)?;
                 Some(bearer_digest(value))
             }
             None => None,
@@ -459,6 +459,7 @@ impl WorkerAuthorityRegistry {
         presented_bearer: &str,
         job: &Job,
         supplied_worker_id: &str,
+        supplied_lease_attempt: Option<i64>,
     ) -> Result<AuthorizedWorker, WorkerAuthorityError> {
         let protected = is_protected_task_type(&job.task_type);
         match self.authenticate(presented_bearer)? {
@@ -474,8 +475,10 @@ impl WorkerAuthorityRegistry {
                         "worker_id must not be empty".to_owned(),
                     ));
                 }
+                validate_optional_lease_attempt(job, supplied_lease_attempt)?;
                 Ok(AuthorizedWorker {
                     worker_id: supplied_worker_id.to_owned(),
+                    lease_attempt: supplied_lease_attempt,
                     profile: None,
                 })
             }
@@ -501,16 +504,35 @@ impl WorkerAuthorityRegistry {
                         "protected job is not leased to the authenticated worker".to_owned(),
                     ));
                 }
+                let lease_attempt = supplied_lease_attempt.ok_or_else(|| {
+                    WorkerAuthorityError::Forbidden(
+                        "protected worker mutations require the current lease_attempt".to_owned(),
+                    )
+                })?;
+                if lease_attempt <= 0 || lease_attempt != job.attempts {
+                    return Err(WorkerAuthorityError::Forbidden(
+                        "protected worker supplied a stale or invalid lease_attempt".to_owned(),
+                    ));
+                }
                 Ok(AuthorizedWorker {
                     worker_id: profile.worker_id.clone(),
+                    lease_attempt: Some(lease_attempt),
                     profile: Some(profile.clone()),
                 })
             }
         }
     }
 
+    pub fn authenticate_presented_bearer(
+        &self,
+        presented_bearer: &str,
+    ) -> Result<(), WorkerAuthorityError> {
+        self.authenticate(presented_bearer).map(|_| ())
+    }
+
     fn authenticate(&self, presented_bearer: &str) -> Result<Credential<'_>, WorkerAuthorityError> {
-        validate_bearer(presented_bearer).map_err(|_| WorkerAuthorityError::Unauthorized)?;
+        validate_presented_bearer(presented_bearer)
+            .map_err(|_| WorkerAuthorityError::Unauthorized)?;
         let digest = bearer_digest(presented_bearer);
         for profile in &self.profiles {
             if bool::from(profile.bearer_digest.ct_eq(&digest)) {
@@ -543,6 +565,7 @@ pub struct AuthorizedClaim {
 #[derive(Debug, Clone)]
 pub struct AuthorizedWorker {
     pub worker_id: String,
+    pub lease_attempt: Option<i64>,
     pub profile: Option<ProtectedWorkerProfile>,
 }
 
@@ -623,6 +646,38 @@ fn require_unique(
     if !values.insert(value.to_owned()) {
         return Err(WorkerAuthorityError::InvalidConfiguration(
             message.to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_admin_bearer(value: &str) -> Result<(), WorkerAuthorityError> {
+    if value.is_empty() || value.len() > 512 || !value.bytes().all(|byte| byte.is_ascii_graphic()) {
+        return Err(WorkerAuthorityError::InvalidConfiguration(
+            "the coordinator admin bearer must contain 1-512 visible ASCII bytes".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_presented_bearer(value: &str) -> Result<(), WorkerAuthorityError> {
+    if value.is_empty() || value.len() > 512 || !value.bytes().all(|byte| byte.is_ascii_graphic()) {
+        return Err(WorkerAuthorityError::InvalidConfiguration(
+            "presented bearer credentials must contain 1-512 visible ASCII bytes".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_optional_lease_attempt(
+    job: &Job,
+    supplied_lease_attempt: Option<i64>,
+) -> Result<(), WorkerAuthorityError> {
+    if supplied_lease_attempt
+        .is_some_and(|lease_attempt| lease_attempt <= 0 || lease_attempt != job.attempts)
+    {
+        return Err(WorkerAuthorityError::Forbidden(
+            "worker supplied a stale or invalid lease_attempt".to_owned(),
         ));
     }
     Ok(())
@@ -988,18 +1043,19 @@ mod tests {
         let bearer = &tokens["WORKER_TOKEN_ANTHROPIC"];
         let job = running_job(LINEAR_OPINION_CLAUDE, Some("linear-opinion-anthropic"));
         let authorized = registry
-            .authorize_job_mutation(bearer, &job, "linear-opinion-anthropic")
+            .authorize_job_mutation(bearer, &job, "linear-opinion-anthropic", Some(job.attempts))
             .expect("authorized protected mutation");
         assert_eq!(authorized.worker_id, "linear-opinion-anthropic");
 
         assert!(registry
-            .authorize_job_mutation(bearer, &job, "spoofed")
+            .authorize_job_mutation(bearer, &job, "spoofed", Some(job.attempts))
             .is_err());
         assert!(registry
             .authorize_job_mutation(
                 bearer,
                 &running_job(LINEAR_OPINION_CLAUDE, Some("another-worker")),
                 "linear-opinion-anthropic",
+                Some(1),
             )
             .is_err());
         assert!(registry
@@ -1007,10 +1063,11 @@ mod tests {
                 &tokens["WORKER_TOKEN_OPENAI"],
                 &job,
                 "linear-opinion-openai",
+                Some(job.attempts),
             )
             .is_err());
         assert!(registry
-            .authorize_job_mutation(ADMIN, &job, "linear-opinion-anthropic")
+            .authorize_job_mutation(ADMIN, &job, "linear-opinion-anthropic", Some(job.attempts),)
             .is_err());
     }
 
@@ -1022,6 +1079,7 @@ mod tests {
                 &tokens["WORKER_TOKEN_OPENAI"],
                 &running_job("code_change", Some("linear-opinion-openai")),
                 "linear-opinion-openai",
+                Some(1),
             )
             .is_err());
         assert_eq!(
@@ -1030,6 +1088,7 @@ mod tests {
                     ADMIN,
                     &running_job("code_change", Some("generic-worker")),
                     "generic-worker",
+                    Some(1),
                 )
                 .expect("legacy unprotected mutation")
                 .worker_id,
@@ -1055,8 +1114,50 @@ mod tests {
                 ADMIN,
                 &running_job(LINEAR_OPINION_CHATGPT, Some("generic-worker")),
                 "generic-worker",
+                Some(1),
             )
             .is_err());
+    }
+
+    #[test]
+    fn short_legacy_admin_bearer_authenticates_without_weakening_worker_floor() {
+        const SHORT_ADMIN: &str = "admin";
+        let (config, tokens) = fixture();
+        let registry =
+            WorkerAuthorityRegistry::from_config_with_lookup(&config, Some(SHORT_ADMIN), |name| {
+                tokens.get(name).cloned()
+            })
+            .expect("short legacy admin bearer remains supported");
+
+        let authorized = registry
+            .authorize_claim(SHORT_ADMIN, &claim("generic-worker", &[]))
+            .expect("short admin bearer authenticates after startup");
+        assert!(authorized.policy.allows("code_change"));
+        assert!(validate_bearer(SHORT_ADMIN).is_err());
+    }
+
+    #[test]
+    fn protected_mutations_require_the_current_positive_lease_attempt() {
+        let (registry, tokens) = registry();
+        let bearer = &tokens["WORKER_TOKEN_OPENAI"];
+        let job = running_job(LINEAR_OPINION_CHATGPT, Some("linear-opinion-openai"));
+
+        assert!(registry
+            .authorize_job_mutation(bearer, &job, "linear-opinion-openai", None)
+            .is_err());
+        assert!(registry
+            .authorize_job_mutation(bearer, &job, "linear-opinion-openai", Some(0))
+            .is_err());
+        assert!(registry
+            .authorize_job_mutation(bearer, &job, "linear-opinion-openai", Some(2))
+            .is_err());
+        assert_eq!(
+            registry
+                .authorize_job_mutation(bearer, &job, "linear-opinion-openai", Some(job.attempts),)
+                .expect("current lease attempt is accepted")
+                .lease_attempt,
+            Some(job.attempts)
+        );
     }
 
     #[test]

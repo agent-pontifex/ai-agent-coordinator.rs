@@ -464,6 +464,7 @@ impl TelemetryAutomation {
                         &job.id,
                         &CompleteJobRequest {
                             worker_id: worker_id.to_owned(),
+                            lease_attempt: Some(job.attempts),
                             outcome: CompletionOutcome::Failed,
                             result: job.result.clone(),
                             error: Some(error.public_message.clone()),
@@ -653,6 +654,7 @@ impl TelemetryAutomation {
                 &job.id,
                 &CompleteJobRequest {
                     worker_id: worker_id.to_owned(),
+                    lease_attempt: Some(job.attempts),
                     outcome: CompletionOutcome::Succeeded,
                     result: Some(result),
                     error: None,
@@ -706,6 +708,7 @@ impl TelemetryAutomation {
                             &job.id,
                             &CompleteJobRequest {
                                 worker_id: claim_worker,
+                                lease_attempt: Some(job.attempts),
                                 outcome: CompletionOutcome::Succeeded,
                                 result: Some(json!({"dispatches": dispatches})),
                                 error: None,
@@ -726,6 +729,7 @@ impl TelemetryAutomation {
                             &job.id,
                             &CompleteJobRequest {
                                 worker_id: claim_worker,
+                                lease_attempt: Some(job.attempts),
                                 outcome: CompletionOutcome::Failed,
                                 result: job.result.clone(),
                                 error: Some(error.public_message),
@@ -1364,6 +1368,7 @@ async fn requeue_job(
             &job.id,
             &CompleteJobRequest {
                 worker_id: worker_id.to_owned(),
+                lease_attempt: Some(job.attempts),
                 outcome: CompletionOutcome::Failed,
                 result,
                 error: Some(message.to_owned()),

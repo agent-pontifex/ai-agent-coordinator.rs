@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{env, sync::Arc};
 
 use axum::{
     body::Bytes,
@@ -26,13 +26,17 @@ use crate::{
     github_admin::{CreateRepositoryRequest, GithubRepositoryAdmin},
     jobs::{
         ClaimJobRequest, CompleteJobRequest, CompletionOutcome, CreateJobRequest,
-        HeartbeatJobRequest,
+        HeartbeatJobRequest, Job,
     },
     linear_delivery::{LinearDeliveryRequest, LinearDeliveryWorker},
     providers::ProviderRegistry,
     security::SecretScanner,
     telemetry::{AlertmanagerPayload, TelemetryAutomation, TelemetryError},
     webhooks,
+    worker_authority::{
+        is_protected_task_type, AuthorizedClaim, AuthorizedWorker, ClaimTaskPolicy,
+        WorkerAuthorityError, WorkerAuthorityRegistry,
+    },
 };
 
 #[derive(Clone)]
@@ -44,6 +48,7 @@ pub struct AppState {
     pub linear_delivery_worker: LinearDeliveryWorker,
     pub telemetry_automation: TelemetryAutomation,
     pub email_attention_agent: EmailAttentionAgent,
+    worker_authority: WorkerAuthorityRegistry,
     api_token: Option<String>,
     github_webhook_policy: webhooks::GithubWebhookPolicy,
 }
@@ -61,6 +66,12 @@ impl AppState {
         let telemetry_automation = TelemetryAutomation::from_env()?;
         let email_attention_agent = EmailAttentionAgent::from_env(Some(&database_url)).await?;
         let api_token = config.api_token();
+        let worker_authority = WorkerAuthorityRegistry::from_config_with_lookup(
+            &config.worker_authority,
+            api_token.as_deref(),
+            |name| env::var(name).ok().filter(|value| !value.is_empty()),
+        )
+        .map_err(anyhow::Error::new)?;
         let github_webhook_policy =
             webhooks::GithubWebhookPolicy::from_env(config.github_webhook_secret())?;
         Ok(Self {
@@ -71,9 +82,26 @@ impl AppState {
             linear_delivery_worker,
             telemetry_automation,
             email_attention_agent,
+            worker_authority,
             api_token,
             github_webhook_policy,
         })
+    }
+
+    fn bearer<'a>(&self, headers: &'a HeaderMap) -> Result<Option<&'a str>, AppError> {
+        let Some(value) = headers.get("authorization") else {
+            return if self.config.auth.required {
+                Err(AppError::Unauthorized)
+            } else {
+                Ok(None)
+            };
+        };
+        let value = value.to_str().map_err(|_| AppError::Unauthorized)?;
+        let bearer = value
+            .strip_prefix("Bearer ")
+            .filter(|value| !value.is_empty())
+            .ok_or(AppError::Unauthorized)?;
+        Ok(Some(bearer))
     }
 
     fn authorize(&self, headers: &HeaderMap) -> Result<(), AppError> {
@@ -81,15 +109,102 @@ impl AppState {
             return Ok(());
         }
         let expected = self.api_token.as_deref().ok_or(AppError::Unauthorized)?;
-        let supplied = headers
-            .get("authorization")
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.strip_prefix("Bearer "))
-            .ok_or(AppError::Unauthorized)?;
+        let supplied = self.bearer(headers)?.ok_or(AppError::Unauthorized)?;
         if bool::from(expected.as_bytes().ct_eq(supplied.as_bytes())) {
             Ok(())
         } else {
             Err(AppError::Unauthorized)
+        }
+    }
+
+    fn authorize_worker_claim(
+        &self,
+        headers: &HeaderMap,
+        request: &ClaimJobRequest,
+    ) -> Result<AuthorizedClaim, AppError> {
+        match self.bearer(headers)? {
+            Some(bearer) => self
+                .worker_authority
+                .authorize_claim(bearer, request)
+                .map_err(map_worker_authority_error),
+            None => {
+                if request
+                    .task_types
+                    .iter()
+                    .any(|task| is_protected_task_type(task))
+                {
+                    return Err(AppError::Forbidden(
+                        "protected tasks require a role-scoped worker credential".to_owned(),
+                    ));
+                }
+                Ok(AuthorizedClaim {
+                    request: request.clone(),
+                    policy: ClaimTaskPolicy::ExcludeProtected,
+                    profile: None,
+                })
+            }
+        }
+    }
+
+    fn authenticate_worker_bearer<'a>(
+        &self,
+        headers: &'a HeaderMap,
+    ) -> Result<Option<&'a str>, AppError> {
+        let bearer = self.bearer(headers)?;
+        if let Some(value) = bearer {
+            self.worker_authority
+                .authenticate_presented_bearer(value)
+                .map_err(map_worker_authority_error)?;
+        }
+        Ok(bearer)
+    }
+
+    fn authorize_worker_mutation(
+        &self,
+        bearer: Option<&str>,
+        job: &Job,
+        supplied_worker_id: &str,
+        supplied_lease_attempt: Option<i64>,
+    ) -> Result<AuthorizedWorker, AppError> {
+        match bearer {
+            Some(bearer) => self
+                .worker_authority
+                .authorize_job_mutation(bearer, job, supplied_worker_id, supplied_lease_attempt)
+                .map_err(map_worker_authority_error),
+            None => {
+                if is_protected_task_type(&job.task_type) {
+                    return Err(AppError::Forbidden(
+                        "protected tasks require a role-scoped worker credential".to_owned(),
+                    ));
+                }
+                if supplied_worker_id.trim().is_empty() {
+                    return Err(AppError::BadRequest(
+                        "worker_id must not be empty".to_owned(),
+                    ));
+                }
+                if supplied_lease_attempt.is_some_and(|lease_attempt| {
+                    lease_attempt <= 0 || lease_attempt != job.attempts
+                }) {
+                    return Err(AppError::Forbidden(
+                        "worker supplied a stale or invalid lease_attempt".to_owned(),
+                    ));
+                }
+                Ok(AuthorizedWorker {
+                    worker_id: supplied_worker_id.to_owned(),
+                    lease_attempt: supplied_lease_attempt,
+                    profile: None,
+                })
+            }
+        }
+    }
+}
+
+fn map_worker_authority_error(error: WorkerAuthorityError) -> AppError {
+    match error {
+        WorkerAuthorityError::Unauthorized => AppError::Unauthorized,
+        WorkerAuthorityError::Forbidden(message) => AppError::Forbidden(message),
+        WorkerAuthorityError::InvalidConfiguration(message) => {
+            AppError::Internal(anyhow::Error::msg(message))
         }
     }
 }
@@ -208,11 +323,18 @@ async fn claim_job(
     headers: HeaderMap,
     Json(request): Json<ClaimJobRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    state.authorize(&headers)?;
-    request.validate().map_err(AppError::BadRequest)?;
+    let authorized = state.authorize_worker_claim(&headers, &request)?;
+    authorized
+        .request
+        .validate()
+        .map_err(AppError::BadRequest)?;
     match state
         .database
-        .claim_job(&request, &state.config.workers)
+        .claim_job_authorized(
+            &authorized.request,
+            &state.config.workers,
+            &authorized.policy,
+        )
         .await
         .map_err(AppError::Internal)?
     {
@@ -242,10 +364,27 @@ async fn heartbeat_job(
     Path(id): Path<String>,
     Json(request): Json<HeartbeatJobRequest>,
 ) -> Result<Json<Value>, AppError> {
-    state.authorize(&headers)?;
+    let bearer = state.authenticate_worker_bearer(&headers)?;
+    let current = state
+        .database
+        .get_job(&id)
+        .await
+        .map_err(AppError::Internal)?
+        .ok_or_else(|| AppError::NotFound(format!("job {id}")))?;
+    let authorized = state.authorize_worker_mutation(
+        bearer,
+        &current,
+        &request.worker_id,
+        request.lease_attempt,
+    )?;
     let job = state
         .database
-        .heartbeat_job(&id, &request.worker_id, request.lease_seconds)
+        .heartbeat_job(
+            &id,
+            &authorized.worker_id,
+            authorized.lease_attempt,
+            request.lease_seconds,
+        )
         .await
         .map_err(|error| AppError::BadRequest(error.to_string()))?;
     Ok(Json(json!({"job": job})))
@@ -255,9 +394,23 @@ async fn complete_job(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    Json(request): Json<CompleteJobRequest>,
+    Json(mut request): Json<CompleteJobRequest>,
 ) -> Result<Json<Value>, AppError> {
-    state.authorize(&headers)?;
+    let bearer = state.authenticate_worker_bearer(&headers)?;
+    let current = state
+        .database
+        .get_job(&id)
+        .await
+        .map_err(AppError::Internal)?
+        .ok_or_else(|| AppError::NotFound(format!("job {id}")))?;
+    let authorized = state.authorize_worker_mutation(
+        bearer,
+        &current,
+        &request.worker_id,
+        request.lease_attempt,
+    )?;
+    request.worker_id = authorized.worker_id;
+    request.lease_attempt = authorized.lease_attempt;
     let job = state
         .database
         .complete_job(&id, &request)
@@ -344,6 +497,7 @@ async fn deliver_next_linear_job(
                     &job.id,
                     &CompleteJobRequest {
                         worker_id,
+                        lease_attempt: Some(job.attempts),
                         outcome: CompletionOutcome::Succeeded,
                         result: Some(result),
                         error: None,
@@ -366,6 +520,7 @@ async fn deliver_next_linear_job(
                     &job.id,
                     &CompleteJobRequest {
                         worker_id,
+                        lease_attempt: Some(job.attempts),
                         outcome: CompletionOutcome::Failed,
                         result: None,
                         error: Some(error.public_message.clone()),

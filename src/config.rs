@@ -3,6 +3,8 @@ use std::{collections::HashMap, env, fs, path::Path};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::worker_authority::ProtectedWorkerAuthorityConfig;
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -15,6 +17,8 @@ pub struct Config {
     pub github: GithubConfig,
     #[serde(default)]
     pub workers: WorkerConfig,
+    #[serde(default)]
+    pub worker_authority: ProtectedWorkerAuthorityConfig,
     #[serde(default)]
     pub routing: RoutingConfig,
     #[serde(default)]
