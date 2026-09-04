@@ -1,0 +1,30 @@
+{
+  "schema_version": "1.0",
+  "event_id": "00000000-0000-4000-8000-000000000001",
+  "idempotency_key": "roundtable.event.0001",
+  "occurred_at": "2026-09-01T12:00:00Z",
+  "source": {
+    "agent_id": "agent-1",
+    "provider": "openai",
+    "model": "gpt-5.6",
+    "metadata": {}
+  },
+  "correlation": {
+    "correlation_id": "00000000-0000-4000-8000-000000000002",
+    "session_id": "roundtable-1"
+  },
+  "kind": "agent.message",
+  "payload_classification": "observable",
+  "redaction_state": "redacted",
+  "evidence_references": [],
+  "delivery": {
+    "transport": "http",
+    "delivery_id": "delivery-1",
+    "attempt": 1,
+    "ack_requested": true,
+    "sequence": 0
+  },
+  "payload": {
+    "summary": "observable output"
+  }
+}

@@ -30,4 +30,6 @@ outputs = [
 adapter = "none"
 
 [scripts]
-test = "make agent-check && python3 scripts/validate_infra.py && python3 scripts/render_infra.py"
+test = "make agent-check"
+validate = "python3 scripts/validate_infra.py"
+render = "python3 scripts/render_infra.py"

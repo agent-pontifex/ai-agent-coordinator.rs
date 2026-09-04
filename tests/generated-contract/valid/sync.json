@@ -1,0 +1,13 @@
+{
+  "from_cursor": {
+    "epoch": 1,
+    "sequence": 0
+  },
+  "through_cursor": {
+    "epoch": 1,
+    "sequence": 0
+  },
+  "events": [],
+  "has_more": false,
+  "reset_required": false
+}

@@ -1,0 +1,13 @@
+{
+  "observation_id": "00000000-0000-4000-8000-000000000001",
+  "asset_id": "00000000-0000-4000-8000-000000000002",
+  "variant_id": "00000000-0000-4000-8000-000000000003",
+  "kind": "ocr_span",
+  "status": "generated",
+  "payload": {
+    "payload_kind": "ocr",
+    "text": "observable text",
+    "reading_order": 0
+  },
+  "created_at": "2026-09-01T12:00:00Z"
+}

@@ -1,0 +1,24 @@
+{
+  "manifest_id": "00000000-0000-4000-8000-000000000001",
+  "asset_id": "00000000-0000-4000-8000-000000000002",
+  "exact_digest": {
+    "algorithm": "sha256",
+    "hex": "0000000000000000000000000000000000000000000000000000000000000000",
+    "bytes": 123
+  },
+  "media_type": "image/png",
+  "dimensions": {
+    "width": 640,
+    "height": 480
+  },
+  "variant": {
+    "variant_id": "00000000-0000-4000-8000-000000000003",
+    "kind": "original",
+    "recipe": "source-v1"
+  },
+  "source_application": {
+    "id": "memebank.app",
+    "version": "1.0.0"
+  },
+  "created_at": "2026-09-01T12:00:00Z"
+}

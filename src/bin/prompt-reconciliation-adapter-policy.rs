@@ -271,9 +271,8 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use std::io;
-
     use super::*;
+    use std::io;
 
     #[test]
     fn secrets_are_redacted_by_debug() {
