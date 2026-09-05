@@ -13,7 +13,9 @@
   ],
   "scripts": {
     "check": "node --experimental-strip-types --check src/generated.ts && node --experimental-strip-types --check src/runtime.ts && node --experimental-strip-types --check src/index.ts",
-    "test": "node --experimental-strip-types test/runtime.smoke.ts"
+    "test": "node --experimental-strip-types test/runtime.smoke.ts",
+    "lint:ores": "if [ -f ../../../../../.ores-lint/lint.sh ]; then sh ../../../../../.ores-lint/lint.sh; else echo 'ores-lint not installed'; fi",
+    "prepublishOnly": "npm run lint:ores"
   },
   "engines": {
     "node": ">=22.18.0"
@@ -22,5 +24,13 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/memebank/mb-clients.git"
+  },
+  "oresLint": {
+    "note": "Declared, not installed. ores-lint resolves these from a global install - see .ores-lint/README.md",
+    "requires": {
+      "eslint": ">=9",
+      "typescript-eslint": ">=8 (optional; without it .ts files are skipped)"
+    },
+    "install": "npm i -g eslint typescript-eslint"
   }
 }
