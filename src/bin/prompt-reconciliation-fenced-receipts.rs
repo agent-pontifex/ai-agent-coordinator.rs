@@ -145,7 +145,7 @@ impl FencedReceiptState {
         self.receipts.get(operation_id)
     }
 
-    pub fn canonical_issue(&self, issue_id: &str) -> &str {
+    pub fn canonical_issue<'a>(&'a self, issue_id: &'a str) -> &'a str {
         self.aliases.get(issue_id).map_or(issue_id, String::as_str)
     }
 
@@ -293,7 +293,10 @@ mod tests {
         let mut state = FencedReceiptState::default();
         let first = state.acquire("worker-a", 100, 50);
         assert!(first.is_ok());
-        assert_eq!(state.acquire("worker-b", 120, 50), Err(StateError::LeaseHeld));
+        assert_eq!(
+            state.acquire("worker-b", 120, 50),
+            Err(StateError::LeaseHeld)
+        );
     }
 
     #[test]
@@ -412,7 +415,11 @@ mod tests {
             0,
             "repair-operation",
             "duplicate-race",
-            ["DEN-30".to_owned(), "DEN-10".to_owned(), "DEN-20".to_owned()],
+            [
+                "DEN-30".to_owned(),
+                "DEN-10".to_owned(),
+                "DEN-20".to_owned(),
+            ],
         );
         assert!(repaired.is_ok());
         let Ok(repaired) = repaired else {
@@ -427,7 +434,11 @@ mod tests {
             1,
             "repair-operation",
             "duplicate-race",
-            ["DEN-20".to_owned(), "DEN-10".to_owned(), "DEN-30".to_owned()],
+            [
+                "DEN-20".to_owned(),
+                "DEN-10".to_owned(),
+                "DEN-30".to_owned(),
+            ],
         );
         assert!(matches!(
             rerun,
