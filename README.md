@@ -114,6 +114,26 @@ range. Agent Pontifex SDK clients fail closed when the service role, protocol, o
 version range is incompatible. Product-specific behavior must remain in a
 namespaced extension; this community descriptor currently advertises none.
 
+### Lease expiry boundary
+
+Heartbeat and completion are admitted only for the worker that currently holds
+a live lease. A lease is expired once `lease_expires_at <= now`; the claim-side
+expiry sweep uses the same predicate, so no instant exists where a lease is both
+reassignable and renewable. Late mutations are rejected under the row lock and
+never change the job:
+
+| Condition | HTTP | `error.code` |
+| --- | --- | --- |
+| Holder's lease expired (`lease_expires_at <= now`) | 409 | `lease_expired` |
+| Job reassigned to (or never claimed by) this worker | 409 | `lease_not_held` |
+| Job queued, succeeded, failed, or cancelled | 409 | `job_not_running` |
+| Job does not exist | 404 | `not_found` |
+
+A heartbeat retried by the live holder is idempotent. A worker that receives
+`lease_expired` or `lease_not_held` must stop and discard its result; it may not
+retry the mutation. Lease decisions read time through an injectable clock
+(`lease::Clock`) so tests pin exact boundaries without sleeping.
+
 After the shared protocol crate moves to `agent-pontifex/agent-sdk.rs`, this local
 compatibility module should consume that crate rather than becoming an
 independent protocol authority.

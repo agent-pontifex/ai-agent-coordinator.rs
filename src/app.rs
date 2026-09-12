@@ -247,7 +247,7 @@ async fn heartbeat_job(
         .database
         .heartbeat_job(&id, &request.worker_id, request.lease_seconds)
         .await
-        .map_err(|error| AppError::BadRequest(error.to_string()))?;
+        .map_err(AppError::from_lease_mutation)?;
     Ok(Json(json!({"job": job})))
 }
 
@@ -262,7 +262,7 @@ async fn complete_job(
         .database
         .complete_job(&id, &request)
         .await
-        .map_err(|error| AppError::BadRequest(error.to_string()))?;
+        .map_err(AppError::from_lease_mutation)?;
     Ok(Json(json!({"job": job})))
 }
 

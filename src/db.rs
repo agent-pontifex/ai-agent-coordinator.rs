@@ -4,7 +4,7 @@
 //! authority lives in k8s-libs-and-shared-defs at:
 //! `pg-defs/schema/databases/ai_agent_coordinator/schema.sql`.
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
@@ -24,6 +24,7 @@ use crate::{
     jobs::{
         ClaimJobRequest, CompleteJobRequest, CompletionOutcome, CreateJobRequest, Job, JobStatus,
     },
+    lease::{admit_holder, Clock, LeaseError, LeaseState, SystemClock},
 };
 
 const SERIALIZABLE_RETRIES: usize = 4;
@@ -31,6 +32,7 @@ const SERIALIZABLE_RETRIES: usize = 4;
 #[derive(Clone)]
 pub struct Database {
     connection: DatabaseConnection,
+    clock: Arc<dyn Clock>,
 }
 
 #[derive(Debug, Clone)]
@@ -67,7 +69,17 @@ impl Database {
         let connection = SeaDatabase::connect(options)
             .await
             .context("failed to connect to the coordinator PostgreSQL database")?;
-        Ok(Self { connection })
+        Ok(Self {
+            connection,
+            clock: Arc::new(SystemClock),
+        })
+    }
+
+    /// Replaces the lease clock. Production uses [`SystemClock`]; tests inject
+    /// [`crate::lease::ManualClock`] to pin mutations to exact lease boundaries.
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
+        self
     }
 
     pub async fn ready(&self) -> Result<()> {
@@ -97,7 +109,7 @@ impl Database {
             }
         }
 
-        let now = Utc::now();
+        let now = self.clock.now();
         let id = Uuid::new_v4().to_string();
         let active_model = jobs::ActiveModel {
             id: Set(id.clone()),
@@ -194,8 +206,12 @@ impl Database {
                 Some(AccessMode::ReadWrite),
             )
             .await?;
-        let now = Utc::now();
+        let now = self.clock.now();
 
+        // Expiry boundary: `lease_expires_at <= now` is expired. This must stay
+        // identical to `crate::lease::is_expired`, which gates heartbeat and
+        // completion, so no instant exists where a lease is both reassignable
+        // and renewable.
         jobs::Entity::update_many()
             .col_expr(jobs::Column::Status, Expr::value("queued"))
             .col_expr(jobs::Column::ClaimedBy, Expr::value(Option::<String>::None))
@@ -206,7 +222,7 @@ impl Database {
             .col_expr(jobs::Column::UpdatedAt, Expr::value(now))
             .filter(jobs::Column::Status.eq(JobStatus::Running.as_str()))
             .filter(jobs::Column::LeaseExpiresAt.is_not_null())
-            .filter(jobs::Column::LeaseExpiresAt.lt(now))
+            .filter(jobs::Column::LeaseExpiresAt.lte(now))
             .filter(Expr::col(jobs::Column::Attempts).lt(Expr::col(jobs::Column::MaxAttempts)))
             .exec(&transaction)
             .await?;
@@ -226,7 +242,7 @@ impl Database {
             .col_expr(jobs::Column::UpdatedAt, Expr::value(now))
             .filter(jobs::Column::Status.eq(JobStatus::Running.as_str()))
             .filter(jobs::Column::LeaseExpiresAt.is_not_null())
-            .filter(jobs::Column::LeaseExpiresAt.lt(now))
+            .filter(jobs::Column::LeaseExpiresAt.lte(now))
             .filter(Expr::col(jobs::Column::Attempts).gte(Expr::col(jobs::Column::MaxAttempts)))
             .exec(&transaction)
             .await?;
@@ -309,8 +325,22 @@ impl Database {
         if !(15..=3600).contains(&lease_seconds) {
             return Err(anyhow!("lease_seconds must be between 15 and 3600"));
         }
-        let now = Utc::now();
+        let transaction = self.connection.begin().await?;
+        let model = jobs::Entity::find_by_id(id)
+            .lock_exclusive()
+            .one(&transaction)
+            .await?
+            .ok_or(LeaseError::NotFound)?;
+        let job = model_to_job(model)?;
+        // The mutation timestamp is read while holding the row lock so the
+        // admission decision and the renewal use the same instant.
+        let now = self.clock.now();
+        admit_holder(lease_state(&job), worker_id, now)?;
+
         let lease_expires_at = now + ChronoDuration::seconds(lease_seconds);
+        // Defence in depth: the guarded UPDATE re-asserts ownership and a live
+        // lease (`lease_expires_at > now`) so it cannot revive an expired lease
+        // even if the admission check above were bypassed.
         let updated = jobs::Entity::update_many()
             .col_expr(
                 jobs::Column::LeaseExpiresAt,
@@ -320,35 +350,38 @@ impl Database {
             .filter(jobs::Column::Id.eq(id))
             .filter(jobs::Column::Status.eq(JobStatus::Running.as_str()))
             .filter(jobs::Column::ClaimedBy.eq(worker_id))
-            .exec(&self.connection)
+            .filter(jobs::Column::LeaseExpiresAt.is_not_null())
+            .filter(jobs::Column::LeaseExpiresAt.gt(now))
+            .exec(&transaction)
             .await?;
         if updated.rows_affected != 1 {
-            return Err(anyhow!(
-                "job is not running, does not exist, or is leased by another worker"
-            ));
+            return Err(LeaseError::Expired.into());
         }
-        self.get_job(id)
+        let renewed = get_job_in(&transaction, id)
             .await?
-            .ok_or_else(|| anyhow!("updated job could not be read"))
+            .ok_or_else(|| anyhow!("updated job could not be read"))?;
+        transaction.commit().await?;
+        Ok(renewed)
     }
 
+    /// Completes a job for the current holder of a live lease.
+    ///
+    /// Rejections are returned as [`LeaseError`] (downcastable from the
+    /// `anyhow::Error`) and never mutate the row: a late worker cannot record a
+    /// result, clear the lease, or requeue a job whose lease expired or was
+    /// reassigned.
     pub async fn complete_job(&self, id: &str, request: &CompleteJobRequest) -> Result<Job> {
         let transaction = self.connection.begin().await?;
         let model = jobs::Entity::find_by_id(id)
             .lock_exclusive()
             .one(&transaction)
             .await?
-            .ok_or_else(|| anyhow!("job not found"))?;
+            .ok_or(LeaseError::NotFound)?;
         let job = model_to_job(model.clone())?;
 
-        if job.status != JobStatus::Running {
-            return Err(anyhow!("job is not running"));
-        }
-        if job.claimed_by.as_deref() != Some(request.worker_id.as_str()) {
-            return Err(anyhow!("job is leased by another worker"));
-        }
+        let now = self.clock.now();
+        admit_holder(lease_state(&job), &request.worker_id, now)?;
 
-        let now = Utc::now();
         let mut active: jobs::ActiveModel = model.into();
         active.result = Set(request.result.clone());
         active.claimed_by = Set(None);
@@ -378,7 +411,7 @@ impl Database {
     }
 
     pub async fn cancel_job(&self, id: &str) -> Result<Job> {
-        let now = Utc::now();
+        let now = self.clock.now();
         let updated = jobs::Entity::update_many()
             .col_expr(jobs::Column::Status, Expr::value("cancelled"))
             .col_expr(jobs::Column::ClaimedBy, Expr::value(Option::<String>::None))
@@ -544,6 +577,14 @@ async fn get_job_in(transaction: &DatabaseTransaction, id: &str) -> Result<Optio
         .await?
         .map(model_to_job)
         .transpose()
+}
+
+fn lease_state(job: &Job) -> LeaseState<'_> {
+    LeaseState {
+        status: job.status,
+        claimed_by: job.claimed_by.as_deref(),
+        lease_expires_at: job.lease_expires_at,
+    }
 }
 
 fn model_to_job(model: jobs::Model) -> Result<Job> {

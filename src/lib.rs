@@ -9,6 +9,7 @@ pub mod error;
 pub mod gateway;
 pub mod github_admin;
 pub mod jobs;
+pub mod lease;
 pub mod linear_delivery_worker;
 pub mod linear_delivery {
     pub use crate::linear_delivery_worker::*;
