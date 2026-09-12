@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0",
+  "provider_kind": 12345,
+  "ownership": "service_managed",
+  "addressing": "object_key",
+  "operations": {
+    "put": true,
+    "read": true,
+    "stat": true,
+    "delete": true,
+    "list": true
+  },
+  "upload_modes": [
+    "single_request"
+  ],
+  "conditional_writes": [
+    "if_match_etag"
+  ],
+  "consistency": "strong",
+  "versioning": "none",
+  "change_tracking": "none"
+}
