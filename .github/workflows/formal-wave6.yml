@@ -1,0 +1,20 @@
+name: Formal Wave 6
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  formal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - name: Validate and execute proof twice
+        run: |
+          set -euo pipefail
+          python3 -m py_compile conformance/formal_wave6_model.py
+          python3 -I conformance/formal_wave6_model.py >/tmp/a
+          python3 -I conformance/formal_wave6_model.py >/tmp/b
+          cmp /tmp/a /tmp/b && cat /tmp/a
