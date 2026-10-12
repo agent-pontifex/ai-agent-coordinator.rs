@@ -7,15 +7,12 @@ use axum::{
     response::Response,
 };
 
-const MAX_REQUEST_ID: usize = 64;
-const MAX_BAGGAGE_BYTES: usize = 256;
-
 fn safe_request_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= MAX_REQUEST_ID
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    // Do not accept free-form identifiers that might be caller-supplied tokens,
+    // prompts, or source material and then leak them into logs.
+    value.len() == 36
+        && uuid::Uuid::parse_str(value)
+            .is_ok_and(|id| id.get_version_num() == 4 && id.to_string() == value)
 }
 
 fn safe_traceparent(value: &str) -> bool {
@@ -56,9 +53,6 @@ pub fn sanitize_correlation_headers(headers: &mut HeaderMap) {
     // Even a syntactically valid baggage entry can carry untrusted prompts,
     // secrets or private source. A future trusted-proxy contract may admit
     // selected otel.* entries; until then always strip before tracing.
-    if headers.get("baggage").is_some_and(|v| v.as_bytes().len() > MAX_BAGGAGE_BYTES) {
-        headers.remove("baggage");
-    }
     headers.remove("baggage");
     headers.remove("tracestate");
 }
@@ -76,7 +70,7 @@ mod tests {
     #[test]
     fn keeps_bounded_id_and_valid_w3c_traceparent_without_baggage() {
         let mut headers = HeaderMap::new();
-        headers.insert("x-request-id", HeaderValue::from_static("req_2026-10.ok"));
+        headers.insert("x-request-id", HeaderValue::from_static("550e8400-e29b-41d4-a716-446655440000"));
         headers.insert("traceparent", HeaderValue::from_static(
             "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
         ));
@@ -104,10 +98,10 @@ mod tests {
             sanitize_correlation_headers(&mut headers);
             assert!(!headers.contains_key("traceparent"));
             assert!(!headers.contains_key("baggage"));
-            // Only syntactically safe, length-bounded IDs survive. The
-            // upstream UUID layer creates the replacement when absent.
+            // Only canonical UUID v4 IDs survive; the request-id layer
+            // generates a fresh UUID when the supplied value is untrusted.
             assert_eq!(headers.contains_key("x-request-id"),
-                bad == "Bearer_private-secret");
+                false);
         }
     }
 
