@@ -25,12 +25,11 @@ fn safe_traceparent(value: &str) -> bool {
     {
         return false;
     }
-    bytes
-        .iter()
-        .enumerate()
-        .all(|(index, byte)| matches!(index, 2 | 35 | 52) && *byte == b'-'
+    bytes.iter().enumerate().all(|(index, byte)| {
+        matches!(index, 2 | 35 | 52) && *byte == b'-'
             || !matches!(index, 2 | 35 | 52)
-                && (byte.is_ascii_digit() || (b'a'..=b'f').contains(byte)))
+                && (byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+    })
 }
 
 /// Never forward third-party tracestate or arbitrary baggage into OTel logs.
@@ -70,14 +69,24 @@ mod tests {
     #[test]
     fn keeps_bounded_id_and_valid_w3c_traceparent_without_baggage() {
         let mut headers = HeaderMap::new();
-        headers.insert("x-request-id", HeaderValue::from_static("550e8400-e29b-41d4-a716-446655440000"));
-        headers.insert("traceparent", HeaderValue::from_static(
-            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
-        ));
-        headers.insert("baggage", HeaderValue::from_static("otel.job_id=secret-prompt"));
+        headers.insert(
+            "x-request-id",
+            HeaderValue::from_static("550e8400-e29b-41d4-a716-446655440000"),
+        );
+        headers.insert(
+            "traceparent",
+            HeaderValue::from_static("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"),
+        );
+        headers.insert(
+            "baggage",
+            HeaderValue::from_static("otel.job_id=secret-prompt"),
+        );
         headers.insert("tracestate", HeaderValue::from_static("vendor=source-code"));
         sanitize_correlation_headers(&mut headers);
-        assert_eq!(headers.get("x-request-id").unwrap(), "req_2026-10.ok");
+        assert_eq!(
+            headers.get("x-request-id").unwrap(),
+            "550e8400-e29b-41d4-a716-446655440000"
+        );
         assert!(headers.contains_key("traceparent"));
         assert!(!headers.contains_key("baggage"));
         assert!(!headers.contains_key("tracestate"));
@@ -85,23 +94,32 @@ mod tests {
 
     #[test]
     fn rejects_secret_or_oversize_request_ids_and_invalid_traceparents() {
-        for bad in ["Bearer_private-secret", "prompt=source-code", "", "has spaces",
-            "bad/token", "a-very-long-identifier-that-is-more-than-sixty-four-bytes-long-and-unsafe"] {
+        for bad in [
+            "Bearer_private-secret",
+            "prompt=source-code",
+            "",
+            "has spaces",
+            "bad/token",
+            "a-very-long-identifier-that-is-more-than-sixty-four-bytes-long-and-unsafe",
+        ] {
             let mut headers = HeaderMap::new();
             if !bad.is_empty() {
                 headers.insert("x-request-id", HeaderValue::from_str(bad).unwrap());
             }
-            headers.insert("traceparent", HeaderValue::from_static(
-                "00-00000000000000000000000000000000-00f067aa0ba902b7-01"));
-            headers.insert("baggage", HeaderValue::from_static(
-                "private-prompt=top-secret-canary"));
+            headers.insert(
+                "traceparent",
+                HeaderValue::from_static("00-00000000000000000000000000000000-00f067aa0ba902b7-01"),
+            );
+            headers.insert(
+                "baggage",
+                HeaderValue::from_static("private-prompt=top-secret-canary"),
+            );
             sanitize_correlation_headers(&mut headers);
             assert!(!headers.contains_key("traceparent"));
             assert!(!headers.contains_key("baggage"));
             // Only canonical UUID v4 IDs survive; the request-id layer
             // generates a fresh UUID when the supplied value is untrusted.
-            assert_eq!(headers.contains_key("x-request-id"),
-                false);
+            assert!(!headers.contains_key("x-request-id"));
         }
     }
 
@@ -110,7 +128,7 @@ mod tests {
         for bad in [
             "00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01",
             "00-4BF92F3577B34DA6A3CE929D0E0E4736-00f067aa0ba902b7-01",
-            "01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+            "01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
         ] {
             let mut headers = HeaderMap::new();
             headers.insert("traceparent", HeaderValue::from_str(bad).unwrap());
