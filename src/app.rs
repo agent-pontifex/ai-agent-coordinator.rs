@@ -136,6 +136,11 @@ pub fn router(state: AppState) -> Router {
         .layer(SetRequestIdLayer::new(request_id_header, MakeRequestUuid))
         .layer(TraceLayer::new_for_http())
         .layer(middleware::from_fn(add_no_store))
+        // Outer boundary: reject caller-supplied secrets in telemetry headers
+        // before TraceLayer and request-id propagation observe them.
+        .layer(middleware::from_fn(
+            crate::correlation::sanitize_inbound_correlation,
+        ))
         .with_state(state)
 }
 
