@@ -109,5 +109,4 @@ jobs:
           GIT_TERMINAL_PROMPT: "0"
         run: |
           set -euo pipefail
-          git -c 'credential.helper=!f() { printf "username=x-access-token\\npassword=%s\\n" "$GH_TOKEN"; }; f' \\
-            push "https://github.com/${GITHUB_REPOSITORY}.git" "HEAD:${GITHUB_REF_NAME}"
+          git -c 'credential.helper=!f() { printf "username=x-access-token\\npassword=%s\\n" "$GH_TOKEN"; }; f' push "https://github.com/${GITHUB_REPOSITORY}.git" "HEAD:${GITHUB_REF_NAME}"
