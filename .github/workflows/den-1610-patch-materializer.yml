@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: den-1610-patch-materializer
@@ -19,13 +19,15 @@ concurrency:
 jobs:
   materialize:
     if: github.ref_name == 'agent/den-1610-authenticated-adapters-v2'
-    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
           ref: ${{ github.sha }}
 
       - name: Verify and materialize reviewed source bundle
@@ -100,4 +102,11 @@ jobs:
             exit 0
           fi
           git commit -m 'feat(DEN-1610): add authenticated reconciliation adapters'
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+      - name: Push reviewed materialization with scoped step-only credentials
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git -c 'credential.helper=!f() { printf "username=x-access-token\\npassword=%s\\n" "$GH_TOKEN"; }; f' push "https://github.com/${GITHUB_REPOSITORY}.git" "HEAD:${GITHUB_REF_NAME}"
